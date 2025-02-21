@@ -12,6 +12,8 @@
 #include "tf/transform_listener.h"
 #include "utils.h"
 
+#include <std_msgs/Float64.h>
+
 namespace faster_lio {
 
 bool LaserMapping::InitROS(const ros::NodeHandle &nh, const ros::NodeHandle &pnh) {
@@ -265,6 +267,7 @@ void LaserMapping::SubAndPubToROS() {
     pub_laser_cloud_effect_world_ = pnh_.advertise<sensor_msgs::PointCloud2>("/cloud_registered_effect_world", 100000);
     pub_odom_aft_mapped_ = pnh_.advertise<nav_msgs::Odometry>("odometry", 100);
     pub_path_ = pnh_.advertise<nav_msgs::Path>("trajectory", 100);
+    pub_cond_number = pnh_.advertise<std_msgs::Float64>("cond_number", 100);
 
     start_lio_service_ = pnh_.advertiseService("start_lidar_odom", &LaserMapping::startLIO, this);
     stop_lio_service_ = pnh_.advertiseService("stop_lidar_odom", &LaserMapping::stopLIO, this);
@@ -276,6 +279,7 @@ LaserMapping::LaserMapping() {
 }
 
 bool LaserMapping::startLIO(std_srvs::Empty::Request &req, std_srvs::Empty::Response &res) {
+    path_.poses.clear();
     lidar_odom_ = true;
     ROS_INFO("Starting Lidar Odometry ..............!");
     return true;
@@ -552,6 +556,39 @@ void LaserMapping::MapIncremental() {
         "    IVox Add Points");
 }
 
+void LaserMapping::computeConditionNumber(const Eigen::Matrix<double, Eigen::Dynamic, Eigen::Dynamic>& h_x)
+{
+    Eigen::Matrix<double, 6, 6> A = Eigen::Matrix<double, 6, 6>::Zero();
+    for (int i = 0; i < h_x.rows(); ++i)
+    {
+        /// Input is J[1x12], we get [1x6]
+        const auto& J = h_x.row(i).head<6>();
+        /// for each jacobian do JtJ and sum all of them
+        const auto JTJ = J.transpose() * J;
+        A += JTJ;
+    }
+    /// Extract only the translation part becoming 3x3 = C
+    const auto C = A.topLeftCorner<3, 3>();
+    /// CTC
+    const auto CTC = C.transpose() * C;
+
+    /// Compute eigenvalues
+    Eigen::EigenSolver<Eigen::Matrix3d> solver(CTC);
+    Eigen::Vector3d eigenvalues = solver.eigenvalues().real();
+
+    /// Get max and min eigenvalues
+    double min_eigenvalue = eigenvalues.minCoeff();
+    double max_eigenvalue = eigenvalues.maxCoeff();
+
+    /// Compute condition number
+    const auto condition_number = sqrt(max_eigenvalue/min_eigenvalue);
+    std::cout << "--------------------------" << std::endl;
+    std::cout << condition_number << std::endl;
+    std_msgs::Float64 msg;
+    msg.data = condition_number;
+    pub_cond_number.publish(msg);
+    return;
+}
 /**
  * Lidar point cloud registration
  * will be called by the eskf custom observation model
@@ -568,6 +605,7 @@ void LaserMapping::ObsModel(state_ikfom &s, esekfom::dyn_share_datastruct<double
     // index[i] = i;
     // }
 
+    /// Computes point to plane distances
     Timer::Evaluate(
         [&, this]() {
             auto R_wl = (s.rot * s.offset_R_L_I).cast<float>();
@@ -642,7 +680,9 @@ void LaserMapping::ObsModel(state_ikfom &s, esekfom::dyn_share_datastruct<double
             ekfom_data.h.resize(effect_feat_num_);
 
             index.resize(effect_feat_num_);
+            /// Rotation lidar to IMU
             const common::M3F off_R = s.offset_R_L_I.toRotationMatrix().cast<float>();
+            /// Translation lidar to IMU
             const common::V3F off_t = s.offset_T_L_I.cast<float>();
             const common::M3F Rt = s.rot.toRotationMatrix().transpose().cast<float>();
 
@@ -675,6 +715,7 @@ void LaserMapping::ObsModel(state_ikfom &s, esekfom::dyn_share_datastruct<double
             });
         },
         "    ObsModel (IEKF Build Jacobian)");
+    computeConditionNumber(ekfom_data.h_x);
 }
 
 /////////////////////////////////////  debug save / show /////////////////////////////////////////////////////
