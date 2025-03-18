@@ -14,6 +14,7 @@
 
 #include <std_msgs/Float64.h>
 
+
 namespace faster_lio {
 
 bool LaserMapping::InitROS(const ros::NodeHandle &nh, const ros::NodeHandle &pnh) {
@@ -23,7 +24,6 @@ bool LaserMapping::InitROS(const ros::NodeHandle &nh, const ros::NodeHandle &pnh
     SubAndPubToROS();
     // localmap init (after LoadParams)
     ivox_ = std::make_shared<IVoxType>(ivox_options_);
-
     // esekf init
     std::vector<double> epsi(23, 0.001);
     kf_.init_dyn_share(
@@ -267,7 +267,7 @@ void LaserMapping::SubAndPubToROS() {
     pub_laser_cloud_effect_world_ = pnh_.advertise<sensor_msgs::PointCloud2>("/cloud_registered_effect_world", 100000);
     pub_odom_aft_mapped_ = pnh_.advertise<nav_msgs::Odometry>("odometry", 100);
     pub_path_ = pnh_.advertise<nav_msgs::Path>("trajectory", 100);
-    pub_cond_number = pnh_.advertise<std_msgs::Float64>("cond_number", 100);
+    pub_cond_number = pnh_.advertise<std_msgs::Float64>("condition_number", 100);
 
     start_lio_service_ = pnh_.advertiseService("start_lidar_odom", &LaserMapping::startLIO, this);
     stop_lio_service_ = pnh_.advertiseService("stop_lidar_odom", &LaserMapping::stopLIO, this);
@@ -422,6 +422,7 @@ void LaserMapping::StandardPCLCallBack(const sensor_msgs::PointCloud2::ConstPtr 
             last_timestamp_lidar_ = msg->header.stamp.toSec();
         },
         "Preprocess (Standard)");
+
     mtx_buffer_.unlock();
 }
 
@@ -582,8 +583,7 @@ void LaserMapping::computeConditionNumber(const Eigen::Matrix<double, Eigen::Dyn
 
     /// Compute condition number
     const auto condition_number = sqrt(max_eigenvalue/min_eigenvalue);
-    std::cout << "--------------------------" << std::endl;
-    std::cout << condition_number << std::endl;
+
     std_msgs::Float64 msg;
     msg.data = condition_number;
     pub_cond_number.publish(msg);
