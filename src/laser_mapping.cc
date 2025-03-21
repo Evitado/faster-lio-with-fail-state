@@ -13,7 +13,7 @@
 #include "utils.h"
 
 #include <std_msgs/Float64.h>
-
+#include <pcl/console/print.h>
 
 namespace faster_lio {
 
@@ -274,6 +274,7 @@ void LaserMapping::SubAndPubToROS() {
 }
 
 LaserMapping::LaserMapping() {
+    pcl::console::setVerbosityLevel(pcl::console::L_ERROR);
     preprocess_.reset(new PointCloudPreprocess());
     p_imu_.reset(new ImuProcess());
 }
