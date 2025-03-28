@@ -58,6 +58,7 @@ class LaserMapping {
     /// interface of mtk, customized obseravtion model
     void ObsModel(state_ikfom &s, esekfom::dyn_share_datastruct<double> &ekfom_data);
 
+    /// Obtained from https://arxiv.org/abs/2411.06766
     void computeConditionNumber(const Eigen::Matrix<double, Eigen::Dynamic, Eigen::Dynamic>& h_v);
 
 

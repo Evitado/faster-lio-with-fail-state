@@ -564,15 +564,15 @@ void LaserMapping::computeConditionNumber(const Eigen::Matrix<double, Eigen::Dyn
     for (int i = 0; i < h_x.rows(); ++i)
     {
         /// Input is J[1x12], we get [1x6]
-        const auto& J = h_x.row(i).head<6>();
+        const Eigen::Matrix<double, 1, 6>& J = h_x.row(i).head<6>();
         /// for each jacobian do JtJ and sum all of them
-        const auto JTJ = J.transpose() * J;
+        const Eigen::Matrix<double, 6, 6> JTJ = J.transpose() * J;
         A += JTJ;
     }
     /// Extract only the translation part becoming 3x3 = C
-    const auto C = A.topLeftCorner<3, 3>();
+    const Eigen::Matrix<double, 3, 3> C = A.topLeftCorner<3, 3>();
     /// CTC
-    const auto CTC = C.transpose() * C;
+    const Eigen::Matrix<double, 3, 3> CTC = C.transpose() * C;
 
     /// Compute eigenvalues
     Eigen::EigenSolver<Eigen::Matrix3d> solver(CTC);
