@@ -583,7 +583,8 @@ void LaserMapping::computeConditionNumber(const Eigen::Matrix<double, Eigen::Dyn
     double max_eigenvalue = eigenvalues.maxCoeff();
 
     /// Compute condition number
-    const auto condition_number = sqrt(max_eigenvalue/min_eigenvalue);
+    /// Adding a small constant to the denominator to avoid dividing by a very small number
+    const auto condition_number = sqrt(max_eigenvalue/(min_eigenvalue + 1e-7));
 
     std_msgs::Float64 msg;
     msg.data = condition_number;
