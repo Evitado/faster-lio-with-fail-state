@@ -16,6 +16,7 @@
 #include "pointcloud_preprocess.h"
 #include "ros/node_handle.h"
 #include "tf/transform_listener.h"
+
 namespace faster_lio {
 
 class LaserMapping {
@@ -56,6 +57,10 @@ class LaserMapping {
 
     /// interface of mtk, customized obseravtion model
     void ObsModel(state_ikfom &s, esekfom::dyn_share_datastruct<double> &ekfom_data);
+
+    /// Obtained from https://arxiv.org/abs/2411.06766
+    void computeConditionNumber(const Eigen::Matrix<double, Eigen::Dynamic, Eigen::Dynamic>& h_v);
+
 
     ////////////////////////////// debug save / show ////////////////////////////////////////////////////////////////
     void PublishPath(const ros::Publisher pub_path);
@@ -127,6 +132,7 @@ class LaserMapping {
     ros::Publisher pub_laser_cloud_effect_world_;
     ros::Publisher pub_odom_aft_mapped_;
     ros::Publisher pub_path_;
+    ros::Publisher pub_cond_number;
     ros::ServiceServer start_lio_service_;
     ros::ServiceServer stop_lio_service_;
     // std::string tf_imu_frame_;
@@ -185,7 +191,7 @@ class LaserMapping {
     geometry_msgs::PoseStamped msg_body_pose_;
 
     // turn on anf off
-    bool lidar_odom_ = true;
+    bool lidar_odom_ = false;
     std::string base_link_frame_;
     std::string lidar_frame_;
     std::string global_frame_;

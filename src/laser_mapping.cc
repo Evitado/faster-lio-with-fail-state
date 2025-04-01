@@ -12,6 +12,9 @@
 #include "tf/transform_listener.h"
 #include "utils.h"
 
+#include <std_msgs/Float64.h>
+#include <pcl/console/print.h>
+
 namespace faster_lio {
 
 bool LaserMapping::InitROS(const ros::NodeHandle &nh, const ros::NodeHandle &pnh) {
@@ -21,7 +24,6 @@ bool LaserMapping::InitROS(const ros::NodeHandle &nh, const ros::NodeHandle &pnh
     SubAndPubToROS();
     // localmap init (after LoadParams)
     ivox_ = std::make_shared<IVoxType>(ivox_options_);
-
     // esekf init
     std::vector<double> epsi(23, 0.001);
     kf_.init_dyn_share(
@@ -265,17 +267,20 @@ void LaserMapping::SubAndPubToROS() {
     pub_laser_cloud_effect_world_ = pnh_.advertise<sensor_msgs::PointCloud2>("/cloud_registered_effect_world", 100000);
     pub_odom_aft_mapped_ = pnh_.advertise<nav_msgs::Odometry>("odometry", 100);
     pub_path_ = pnh_.advertise<nav_msgs::Path>("trajectory", 100);
+    pub_cond_number = pnh_.advertise<std_msgs::Float64>("condition_number", 100);
 
     start_lio_service_ = pnh_.advertiseService("start_lidar_odom", &LaserMapping::startLIO, this);
     stop_lio_service_ = pnh_.advertiseService("stop_lidar_odom", &LaserMapping::stopLIO, this);
 }
 
 LaserMapping::LaserMapping() {
+    pcl::console::setVerbosityLevel(pcl::console::L_ERROR);
     preprocess_.reset(new PointCloudPreprocess());
     p_imu_.reset(new ImuProcess());
 }
 
 bool LaserMapping::startLIO(std_srvs::Empty::Request &req, std_srvs::Empty::Response &res) {
+    path_.poses.clear();
     lidar_odom_ = true;
     ROS_INFO("Starting Lidar Odometry ..............!");
     return true;
@@ -418,6 +423,7 @@ void LaserMapping::StandardPCLCallBack(const sensor_msgs::PointCloud2::ConstPtr 
             last_timestamp_lidar_ = msg->header.stamp.toSec();
         },
         "Preprocess (Standard)");
+
     mtx_buffer_.unlock();
 }
 
@@ -552,6 +558,39 @@ void LaserMapping::MapIncremental() {
         "    IVox Add Points");
 }
 
+void LaserMapping::computeConditionNumber(const Eigen::Matrix<double, Eigen::Dynamic, Eigen::Dynamic>& h_x)
+{
+    Eigen::Matrix<double, 6, 6> A = Eigen::Matrix<double, 6, 6>::Zero();
+    for (int i = 0; i < h_x.rows(); ++i)
+    {
+        /// Input is J[1x12], we get [1x6]
+        const Eigen::Matrix<double, 1, 6>& J = h_x.row(i).head<6>();
+        /// for each jacobian do JtJ and sum all of them
+        const Eigen::Matrix<double, 6, 6> JTJ = J.transpose() * J;
+        A += JTJ;
+    }
+    /// Extract only the translation part becoming 3x3 = C
+    const Eigen::Matrix<double, 3, 3> C = A.topLeftCorner<3, 3>();
+    /// CTC
+    const Eigen::Matrix<double, 3, 3> CTC = C.transpose() * C;
+
+    /// Compute eigenvalues
+    Eigen::EigenSolver<Eigen::Matrix3d> solver(CTC);
+    Eigen::Vector3d eigenvalues = solver.eigenvalues().real();
+
+    /// Get max and min eigenvalues
+    double min_eigenvalue = eigenvalues.minCoeff();
+    double max_eigenvalue = eigenvalues.maxCoeff();
+
+    /// Compute condition number
+    /// Adding a small constant to the denominator to avoid dividing by a very small number
+    const auto condition_number = sqrt(max_eigenvalue/(min_eigenvalue + 1e-7));
+
+    std_msgs::Float64 msg;
+    msg.data = condition_number;
+    pub_cond_number.publish(msg);
+    return;
+}
 /**
  * Lidar point cloud registration
  * will be called by the eskf custom observation model
@@ -568,6 +607,7 @@ void LaserMapping::ObsModel(state_ikfom &s, esekfom::dyn_share_datastruct<double
     // index[i] = i;
     // }
 
+    /// Computes point to plane distances
     Timer::Evaluate(
         [&, this]() {
             auto R_wl = (s.rot * s.offset_R_L_I).cast<float>();
@@ -642,7 +682,9 @@ void LaserMapping::ObsModel(state_ikfom &s, esekfom::dyn_share_datastruct<double
             ekfom_data.h.resize(effect_feat_num_);
 
             index.resize(effect_feat_num_);
+            /// Rotation lidar to IMU
             const common::M3F off_R = s.offset_R_L_I.toRotationMatrix().cast<float>();
+            /// Translation lidar to IMU
             const common::V3F off_t = s.offset_T_L_I.cast<float>();
             const common::M3F Rt = s.rot.toRotationMatrix().transpose().cast<float>();
 
@@ -675,6 +717,7 @@ void LaserMapping::ObsModel(state_ikfom &s, esekfom::dyn_share_datastruct<double
             });
         },
         "    ObsModel (IEKF Build Jacobian)");
+    computeConditionNumber(ekfom_data.h_x);
 }
 
 /////////////////////////////////////  debug save / show /////////////////////////////////////////////////////
