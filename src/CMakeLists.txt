@@ -12,7 +12,7 @@ target_link_libraries(${PROJECT_NAME}
         ${PCL_LIBRARIES}
         ${PYTHON_LIBRARIES}
         tbb
-        glog
+        glog::glog
         yaml-cpp
         )
 

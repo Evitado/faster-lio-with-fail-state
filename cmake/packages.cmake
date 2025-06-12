@@ -1,12 +1,12 @@
 list(APPEND CMAKE_MODULE_PATH ${PROJECT_SOURCE_DIR}/cmake)
 
 # glog
-find_package(Glog REQUIRED)
+find_package(glog REQUIRED)
 include_directories(${Glog_INCLUDE_DIRS})
 
 # for ubuntu 18.04, update gcc/g++ to 9, and download tbb2018 from
 # https://github.com/oneapi-src/oneTBB/releases/download/2018/tbb2018_20170726oss_lin.tgz,
-# extract it into CUSTOM_TBB_DIR 
+# extract it into CUSTOM_TBB_DIR
 # specifiy tbb2018, e.g. CUSTOM_TBB_DIR=/home/idriver/Documents/tbb2018_20170726oss
 if (CUSTOM_TBB_DIR)
     set(TBB2018_INCLUDE_DIR "${CUSTOM_TBB_DIR}/include")
