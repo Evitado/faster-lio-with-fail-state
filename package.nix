@@ -17,6 +17,7 @@
   rostest,
   sensor-msgs,
   std-msgs,
+  tbb_2022_0,
   tf,
   yaml-cpp,
 }:
@@ -30,6 +31,7 @@ buildRosPackage rec {
   buildInputs = [
     catkin
     message-generation
+    tbb_2022_0
   ];
   checkInputs = [
     rosbag
