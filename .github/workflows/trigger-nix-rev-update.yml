@@ -30,3 +30,11 @@ jobs:
           ref: ${{ steps.set_branch.outputs.target_branch }}
           token: ${{ secrets.EVITADO_GITHUB_PAT }}
           inputs: '{"repo_name": "${{ github.event.repository.name }}", "commit_hash": "${{ github.sha }}"}'
+
+      - name: Trigger workflow_dispatch in nix_ros_workspace
+        uses: benc-uk/workflow-dispatch@v1
+        with:
+          workflow: update-submodules.yml
+          repo: Evitado/nix_ros_workspace
+          ref: ${{ steps.set_branch.outputs.target_branch }}
+          token: ${{ secrets.EVITADO_GITHUB_PAT }}
