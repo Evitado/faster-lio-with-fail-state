@@ -1,0 +1,32 @@
+name: Trigger Nix Rev Update
+
+on:
+  push:
+    branches:
+      - main
+      - master
+      - trunk
+      - nix
+      - "v[0-9]+.[0-9]+.x"
+
+jobs:
+  trigger-update:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Set target branch
+        id: set_branch
+        run: |
+          if [[ "${{ github.ref_name }}" =~ ^(main|master|trunk|nix)$ ]]; then
+            echo "target_branch=trunk" >> $GITHUB_OUTPUT
+          else
+            echo "target_branch=${{ github.ref_name }}" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Trigger workflow_dispatch in evitado_nix_ros
+        uses: benc-uk/workflow-dispatch@v1
+        with:
+          workflow: update-nix-rev.yml
+          repo: Evitado/evitado_nix_ros
+          ref: ${{ steps.set_branch.outputs.target_branch }}
+          token: ${{ secrets.EVITADO_GITHUB_PAT }}
+          inputs: '{"repo_name": "${{ github.event.repository.name }}", "commit_hash": "${{ github.sha }}"}'
