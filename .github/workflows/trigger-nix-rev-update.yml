@@ -22,19 +22,19 @@ jobs:
             echo "target_branch=${{ github.ref_name }}" >> $GITHUB_OUTPUT
           fi
 
-      - name: Trigger workflow_dispatch in evitado_nix_ros
+      - name: Trigger workflow_dispatch in evitado_nix_production
         uses: benc-uk/workflow-dispatch@v1
         with:
           workflow: update-nix-rev.yml
-          repo: Evitado/evitado_nix_ros
+          repo: Evitado/evitado_nix_production
           ref: ${{ steps.set_branch.outputs.target_branch }}
           token: ${{ secrets.EVITADO_GITHUB_PAT }}
           inputs: '{"repo_name": "${{ github.event.repository.name }}", "commit_hash": "${{ github.sha }}"}'
 
-      - name: Trigger workflow_dispatch in nix_ros_workspace
+      - name: Trigger workflow_dispatch in evitado_nix_workspace
         uses: benc-uk/workflow-dispatch@v1
         with:
           workflow: update-submodules.yml
-          repo: Evitado/nix_ros_workspace
+          repo: Evitado/evitado_nix_workspace
           ref: ${{ steps.set_branch.outputs.target_branch }}
           token: ${{ secrets.EVITADO_GITHUB_PAT }}
