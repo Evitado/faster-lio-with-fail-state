@@ -7,12 +7,15 @@ on:
       - master
       - trunk
       - nix
+      - 'v*.*.x'
     paths-ignore:
       - '.github/workflows/**'
 
 jobs:
   trigger-update:
     runs-on: ubuntu-latest
+    # Skip if this is a branch creation event
+    if: ${{ github.event.created == false }}
     steps:
       - name: Set target branch
         id: set_branch
