@@ -42,3 +42,4 @@ jobs:
           repo: Evitado/evitado_nix_workspace
           ref: ${{ steps.set_branch.outputs.target_branch }}
           token: ${{ secrets.EVITADO_GITHUB_PAT }}
+          inputs: '{"repo_name": "${{ github.event.repository.name }}", "commit_hash": "${{ github.sha }}"}'
