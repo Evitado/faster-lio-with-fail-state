@@ -36,6 +36,12 @@ void PointCloudPreprocess::Oust64Handler(const sensor_msgs::PointCloud2::ConstPt
     int plsize = pl_orig.size();
     cloud_out_.reserve(plsize);
 
+    // When the merged cloud has no 't' field, deskewing is done upstream; treat all points as simultaneous.
+    bool has_t_field = false;
+    for (const auto &field : msg->fields) {
+        if (field.name == "t") { has_t_field = true; break; }
+    }
+
     for (int i = 0; i < pl_orig.points.size(); i++) {
         if (i % point_filter_num_ != 0) continue;
 
@@ -44,7 +50,6 @@ void PointCloudPreprocess::Oust64Handler(const sensor_msgs::PointCloud2::ConstPt
 
         if (range < (blind_ * blind_)) continue;
 
-        Eigen::Vector3d pt_vec;
         PointType added_pt;
         added_pt.x = pl_orig.points[i].x;
         added_pt.y = pl_orig.points[i].y;
@@ -53,7 +58,7 @@ void PointCloudPreprocess::Oust64Handler(const sensor_msgs::PointCloud2::ConstPt
         added_pt.normal_x = 0;
         added_pt.normal_y = 0;
         added_pt.normal_z = 0;
-        added_pt.curvature = pl_orig.points[i].t / 1e6;  // curvature unit: ms
+        added_pt.curvature = has_t_field ? pl_orig.points[i].t / 1e6 : 0.0;  // curvature unit: ms
 
         cloud_out_.points.push_back(added_pt);
     }
