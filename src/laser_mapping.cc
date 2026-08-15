@@ -724,7 +724,9 @@ void LaserMapping::ObsModel(state_ikfom &s, esekfom::dyn_share_datastruct<double
 
 void LaserMapping::PublishPath(const ros::Publisher pub_path) {
     SetPosestamp(msg_body_pose_);
-    msg_body_pose_.header.stamp = ros::Time().fromSec(lidar_end_time_);
+    // Published stamp is scan-begin (lidar_bag_time_), not scan-end (lidar_end_time_, used only
+    // internally for IMU sync/deskew): keeps this in sync with TICPTracking's stamp basis.
+    msg_body_pose_.header.stamp = ros::Time().fromSec(measures_.lidar_bag_time_);
     msg_body_pose_.header.frame_id = global_frame_;
 
     /*** if path is too large, the rvis will crash ***/
@@ -738,7 +740,7 @@ void LaserMapping::PublishKeypoints(const ros::Publisher &pubLaserCloudFull) {
     // ROS_INFO("Internally the keypoints size is %zu", feats_down_body->size());
     sensor_msgs::PointCloud2 laserCloudmsg;
     pcl::toROSMsg(*scan_down_world_, laserCloudmsg);
-    laserCloudmsg.header.stamp = ros::Time().fromSec(lidar_end_time_);
+    laserCloudmsg.header.stamp = ros::Time().fromSec(measures_.lidar_bag_time_);
     laserCloudmsg.header.frame_id = global_frame_;
     pubLaserCloudFull.publish(laserCloudmsg);
 }
@@ -749,7 +751,7 @@ void LaserMapping::PublishOdometry(const ros::Publisher &pub_odom_aft_mapped) {
     if (!lidar_odom_) {
         // Broadcast the tf
         geometry_msgs::TransformStamped transform_msg;
-        transform_msg.header.stamp = ros::Time().fromSec(lidar_end_time_);
+        transform_msg.header.stamp = ros::Time().fromSec(measures_.lidar_bag_time_);
         transform_msg.header.frame_id = global_frame_;
         transform_msg.child_frame_id = base_link_frame_;
         transform_msg.transform.rotation.x = 0;
@@ -762,7 +764,7 @@ void LaserMapping::PublishOdometry(const ros::Publisher &pub_odom_aft_mapped) {
         br.sendTransform(transform_msg);
 
         // publish odometry msg as Identity
-        odom_aft_mapped_.header.stamp = ros::Time().fromSec(lidar_end_time_);
+        odom_aft_mapped_.header.stamp = ros::Time().fromSec(measures_.lidar_bag_time_);
         odom_aft_mapped_.header.frame_id = global_frame_;
         odom_aft_mapped_.child_frame_id = base_link_frame_;
         odom_aft_mapped_.pose.pose.orientation.x = 0;
@@ -778,7 +780,7 @@ void LaserMapping::PublishOdometry(const ros::Publisher &pub_odom_aft_mapped) {
     odom_aft_mapped_.header.frame_id = global_frame_;
     // TODO: think about this
     odom_aft_mapped_.child_frame_id = base_link_frame_;
-    odom_aft_mapped_.header.stamp = ros::Time().fromSec(lidar_end_time_);
+    odom_aft_mapped_.header.stamp = ros::Time().fromSec(measures_.lidar_bag_time_);
     SetPosestamp(odom_aft_mapped_.pose);
     pub_odom_aft_mapped.publish(odom_aft_mapped_);
     auto P = kf_.get_P();
@@ -808,8 +810,8 @@ void LaserMapping::PublishOdometry(const ros::Publisher &pub_odom_aft_mapped) {
         tf_listener_.lookupTransform(lidar_frame_, base_link_frame_, ros::Time(0), sensor2tug);
 
         tf::Transform odom2tug = transform * sensor2tug;
-        br.sendTransform(
-            tf::StampedTransform(odom2tug, ros::Time().fromSec(lidar_end_time_), global_frame_, base_link_frame_));
+        br.sendTransform(tf::StampedTransform(odom2tug, ros::Time().fromSec(measures_.lidar_bag_time_), global_frame_,
+                                              base_link_frame_));
     } catch (tf::TransformException ex) {
         ROS_ERROR("%s", ex.what());
     }
@@ -835,7 +837,7 @@ void LaserMapping::PublishFrameWorld() {
     if (run_in_offline_ == false && scan_pub_en_) {
         sensor_msgs::PointCloud2 laserCloudmsg;
         pcl::toROSMsg(*laserCloudWorld, laserCloudmsg);
-        laserCloudmsg.header.stamp = ros::Time().fromSec(lidar_end_time_);
+        laserCloudmsg.header.stamp = ros::Time().fromSec(measures_.lidar_bag_time_);
         laserCloudmsg.header.frame_id = global_frame_;
         pub_laser_cloud_world_.publish(laserCloudmsg);
         publish_count_ -= options::PUBFRAME_PERIOD;
@@ -872,7 +874,7 @@ void LaserMapping::PublishFrameBody(const ros::Publisher &pub_laser_cloud_body) 
 
     sensor_msgs::PointCloud2 laserCloudmsg;
     pcl::toROSMsg(*laser_cloud_imu_body, laserCloudmsg);
-    laserCloudmsg.header.stamp = ros::Time().fromSec(lidar_end_time_);
+    laserCloudmsg.header.stamp = ros::Time().fromSec(measures_.lidar_bag_time_);
     laserCloudmsg.header.frame_id = base_link_frame_;
     pub_laser_cloud_body.publish(laserCloudmsg);
     publish_count_ -= options::PUBFRAME_PERIOD;
