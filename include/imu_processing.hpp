@@ -10,6 +10,7 @@
 #include <fstream>
 
 #include "common_lib.h"
+#include "profiling.h"
 #include "so3_math.h"
 #include "use-ikfom.hpp"
 #include "utils.h"
@@ -164,6 +165,7 @@ void ImuProcess::IMUInit(const common::MeasureGroup &meas, esekfom::esekf<state_
 
 void ImuProcess::UndistortPcl(const common::MeasureGroup &meas, esekfom::esekf<state_ikfom, 12, input_ikfom> &kf_state,
                               PointCloudType &pcl_out) {
+    PROFILE_SCOPE("undistort");
     /*** add the imu_ of the last frame-tail to the of current frame-head ***/
     auto v_imu = meas.imu_;
     v_imu.push_front(last_imu_);
@@ -174,7 +176,21 @@ void ImuProcess::UndistortPcl(const common::MeasureGroup &meas, esekfom::esekf<s
 
     /*** sort point clouds by offset time ***/
     pcl_out = *(meas.lidar_);
-    sort(pcl_out.points.begin(), pcl_out.points.end(), time_list);
+    if (!std::is_sorted(pcl_out.points.begin(), pcl_out.points.end(), time_list)) {
+        // sort small (time, index) keys and gather once instead of swapping 48 byte points around;
+        // ties keep their input order
+        std::vector<std::pair<float, uint32_t>> keys(pcl_out.size());
+        for (size_t i = 0; i < keys.size(); ++i) {
+            keys[i] = {pcl_out.points[i].curvature, static_cast<uint32_t>(i)};
+        }
+        std::sort(keys.begin(), keys.end());
+        decltype(pcl_out.points) sorted;
+        sorted.reserve(keys.size());
+        for (const auto &k : keys) {
+            sorted.push_back(pcl_out.points[k.second]);
+        }
+        pcl_out.points.swap(sorted);
+    }
 
     /*** Initialize IMU pose ***/
     state_ikfom imu_state = kf_state.get_x();
@@ -246,6 +262,13 @@ void ImuProcess::UndistortPcl(const common::MeasureGroup &meas, esekfom::esekf<s
     if (pcl_out.points.empty()) {
         return;
     }
+    // p_compensate = R_LI^T * (R_e^T * (R_i * (R_LI * P_i + T_LI) + T_ei) - T_LI) = M * P_i + c, where M and c only
+    // depend on the point time, so they are composed once per distinct time and reused for points sharing it
+    const common::M3D R_LI = imu_state.offset_R_L_I.toRotationMatrix();
+    const common::M3D R_LI_T = R_LI.transpose();
+    const common::M3D R_e_T = imu_state.rot.toRotationMatrix().transpose();
+    const common::V3D &T_LI = imu_state.offset_T_L_I;
+
     auto it_pcl = pcl_out.points.end() - 1;
     for (auto it_kp = IMUpose_.end() - 1; it_kp != IMUpose_.begin(); it_kp--) {
         auto head = it_kp - 1;
@@ -256,21 +279,29 @@ void ImuProcess::UndistortPcl(const common::MeasureGroup &meas, esekfom::esekf<s
         acc_imu = common::VecFromArray(tail->acc);
         angvel_avr = common::VecFromArray(tail->gyr);
 
+        bool have_cached = false;
+        float cached_time = 0;
+        common::M3D M;
+        common::V3D c;
         for (; it_pcl->curvature / double(1000) > head->offset_time; it_pcl--) {
-            dt = it_pcl->curvature / double(1000) - head->offset_time;
+            if (!have_cached || it_pcl->curvature != cached_time) {
+                dt = it_pcl->curvature / double(1000) - head->offset_time;
 
-            /* Transform to the 'end' frame, using only the rotation
-             * Note: Compensation direction is INVERSE of Frame's moving direction
-             * So if we want to compensate a point at timestamp-i to the frame-e
-             * p_compensate = R_imu_e ^ T * (R_i * P_i + T_ei) where T_ei is represented in global frame */
-            common::M3D R_i(R_imu * Exp(angvel_avr, dt));
+                /* Transform to the 'end' frame, using only the rotation
+                 * Note: Compensation direction is INVERSE of Frame's moving direction
+                 * So if we want to compensate a point at timestamp-i to the frame-e
+                 * p_compensate = R_imu_e ^ T * (R_i * P_i + T_ei) where T_ei is represented in global frame */
+                common::M3D R_i(R_imu * Exp(angvel_avr, dt));
+                common::V3D T_ei(pos_imu + vel_imu * dt + 0.5 * acc_imu * dt * dt - imu_state.pos);
+                const common::M3D R_eT_R_i = R_e_T * R_i;
+                M = R_LI_T * R_eT_R_i * R_LI;
+                c = R_LI_T * (R_eT_R_i * T_LI + R_e_T * T_ei - T_LI);  // not accurate!
+                cached_time = it_pcl->curvature;
+                have_cached = true;
+            }
 
             common::V3D P_i(it_pcl->x, it_pcl->y, it_pcl->z);
-            common::V3D T_ei(pos_imu + vel_imu * dt + 0.5 * acc_imu * dt * dt - imu_state.pos);
-            common::V3D p_compensate =
-                imu_state.offset_R_L_I.conjugate() *
-                (imu_state.rot.conjugate() * (R_i * (imu_state.offset_R_L_I * P_i + imu_state.offset_T_L_I) + T_ei) -
-                 imu_state.offset_T_L_I);  // not accurate!
+            common::V3D p_compensate = M * P_i + c;
 
             // save Undistorted points and their rotation
             it_pcl->x = p_compensate(0);
@@ -286,6 +317,7 @@ void ImuProcess::UndistortPcl(const common::MeasureGroup &meas, esekfom::esekf<s
 
 void ImuProcess::Process(const common::MeasureGroup &meas, esekfom::esekf<state_ikfom, 12, input_ikfom> &kf_state,
                          PointCloudType::Ptr cur_pcl_un_) {
+    PROFILE_SCOPE("imu process");
     if (meas.imu_.empty()) {
         return;
     }

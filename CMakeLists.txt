@@ -1,7 +1,9 @@
 cmake_minimum_required(VERSION 3.5)
 project(faster_lio)
 
-set(DEFAULT_BUILD_TYPE "Release")
+if (NOT CMAKE_BUILD_TYPE)
+    set(CMAKE_BUILD_TYPE "Release")
+endif ()
 
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
@@ -27,6 +29,12 @@ if (WITH_IVOX_NODE_TYPE_PHC)
 else ()
     message("USING_IVOX_NODE_TYPE_DEFAULT")
 endif()
+
+# profiling (see profiling/README.md): Tracy client from the copy evitado_common vendors
+option(FASTER_LIO_TRACY "Instrument with the Tracy profiler (zones, cpu/memory plots)" OFF)
+option(FASTER_LIO_TRACY_MEMORY "With FASTER_LIO_TRACY: also record every operator new/delete" ON)
+set(FASTER_LIO_TRACY_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../evitado/evitado_common/foreign/tracy"
+    CACHE PATH "Tracy source tree providing public/TracyClient.cpp")
 
 add_subdirectory(src)
 add_subdirectory(app)

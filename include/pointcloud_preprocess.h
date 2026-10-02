@@ -82,6 +82,8 @@ class PointCloudPreprocess {
 
    private:
     void Oust64Handler(const sensor_msgs::PointCloud2::ConstPtr &msg);
+    /// generic pcl conversion, used when the cloud layout is not the plain little-endian float xyz one
+    void Oust64HandlerPcl(const sensor_msgs::PointCloud2::ConstPtr &msg);
     void VelodyneHandler(const sensor_msgs::PointCloud2::ConstPtr &msg);
 
     PointCloudType cloud_full_, cloud_out_;

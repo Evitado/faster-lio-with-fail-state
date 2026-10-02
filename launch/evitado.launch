@@ -7,12 +7,17 @@
     <rosparam command="load" file="$(find faster_lio)/config/ouster64.yaml" />
 
     <param name="feature_extract_enable" type="bool" value="0"/>
-    <param name="point_filter_num_" type="int" value="4"/>
     <param name="max_iteration" type="int" value="3" />
     <param name="filter_size_surf" type="double" value="0.5" />
     <param name="filter_size_map" type="double" value="0.5" />
     <param name="cube_side_length" type="double" value="1000" />
     <param name="runtime_pos_log_enable" type="bool" value="0" />
+    <!-- cap TBB workers: idle TBB threads spin; with 2 the e175 scans take ~9 ms cpu / ~5 ms wall, same results -->
+    <param name="tbb_num_threads" type="int" value="2" />
+    <!-- within one scan, re-run the nn search of a point only if the pose update moved it more than this [m] -->
+    <param name="nn_reuse_distance" type="double" value="0.01" />
+    <!-- per-stage timing (Timer) for profiling -->
+    <param name="debug_en" type="bool" value="false" />
     <node pkg="faster_lio" type="run_mapping_online" name="lidar_odometry" output="screen"> 
       <param name="base_link_frame" value="$(arg base_link_frame)" />
       <param name="lidar_frame" value="$(arg lidar_frame)" />

@@ -22,6 +22,9 @@ using PointType = pcl::PointXYZINormal;
 using PointCloudType = pcl::PointCloud<PointType>;
 using CloudPtr = PointCloudType::Ptr;
 using PointVector = std::vector<PointType, Eigen::aligned_allocator<PointType>>;
+/// the local map only needs positions: 16 bytes per point instead of 48
+using MapPointType = pcl::PointXYZ;
+using MapPointVector = std::vector<MapPointType, Eigen::aligned_allocator<MapPointType>>;
 
 namespace faster_lio::common {
 
@@ -184,47 +187,23 @@ inline float calc_dist(const Eigen::Vector3f &p1, const Eigen::Vector3f &p2) { r
  * @param threshold
  * @return
  */
-template <typename T>
-inline bool esti_plane(Eigen::Matrix<T, 4, 1> &pca_result, const PointVector &point, const T &threshold = 0.1f) {
+template <typename T, typename PointVec>
+inline bool esti_plane(Eigen::Matrix<T, 4, 1> &pca_result, const PointVec &point, const T &threshold = 0.1f) {
     if (point.size() < options::MIN_NUM_MATCH_POINTS) {
         return false;
     }
 
-    Eigen::Matrix<T, 3, 1> normvec;
-
-    if (point.size() == options::NUM_MATCH_POINTS) {
-        Eigen::Matrix<T, options::NUM_MATCH_POINTS, 3> A;
-        Eigen::Matrix<T, options::NUM_MATCH_POINTS, 1> b;
-
-        A.setZero();
-        b.setOnes();
-        b *= -1.0f;
-
-        for (int j = 0; j < options::NUM_MATCH_POINTS; j++) {
-            A(j, 0) = point[j].x;
-            A(j, 1) = point[j].y;
-            A(j, 2) = point[j].z;
-        }
-
-        normvec = A.colPivHouseholderQr().solve(b);
-    } else {
-        Eigen::MatrixXd A(point.size(), 3);
-        Eigen::VectorXd b(point.size(), 1);
-
-        A.setZero();
-        b.setOnes();
-        b *= -1.0f;
-
-        for (int j = 0; j < point.size(); j++) {
-            A(j, 0) = point[j].x;
-            A(j, 1) = point[j].y;
-            A(j, 2) = point[j].z;
-        }
-
-        Eigen::MatrixXd n = A.colPivHouseholderQr().solve(b);
-        normvec(0, 0) = n(0, 0);
-        normvec(1, 0) = n(1, 0);
-        normvec(2, 0) = n(2, 0);
+    // least squares for n in A * n = -1 via the 3x3 normal equations, in double for conditioning
+    Eigen::Matrix3d AtA = Eigen::Matrix3d::Zero();
+    Eigen::Vector3d Atb = Eigen::Vector3d::Zero();
+    for (const auto &p : point) {
+        const Eigen::Vector3d a(p.x, p.y, p.z);
+        AtA.noalias() += a * a.transpose();
+        Atb -= a;
+    }
+    const Eigen::Matrix<T, 3, 1> normvec = AtA.ldlt().solve(Atb).template cast<T>();
+    if (!normvec.allFinite() || normvec.squaredNorm() == 0) {
+        return false;  // degenerate (e.g. collinear) neighbourhood
     }
 
     T n = normvec.norm();

@@ -5,10 +5,12 @@
 #include <pcl/filters/voxel_grid.h>
 #include <ros/ros.h>
 #include <sensor_msgs/PointCloud2.h>
+#include <atomic>
 #include <condition_variable>
 #include <thread>
 
 #include <std_srvs/Empty.h>
+#include <tbb/global_control.h>
 #include "common_lib.h"
 #include "imu_processing.hpp"
 #include "ivox3d/ivox3d.h"
@@ -24,9 +26,9 @@ class LaserMapping {
     EIGEN_MAKE_ALIGNED_OPERATOR_NEW;
 
 #ifdef IVOX_NODE_TYPE_PHC
-    using IVoxType = IVox<3, IVoxNodeType::PHC, PointType>;
+    using IVoxType = IVox<3, IVoxNodeType::PHC, MapPointType>;
 #else
-    using IVoxType = IVox<3, IVoxNodeType::DEFAULT, PointType>;
+    using IVoxType = IVox<3, IVoxNodeType::DEFAULT, MapPointType>;
 #endif
 
     LaserMapping();
@@ -59,7 +61,8 @@ class LaserMapping {
     void ObsModel(state_ikfom &s, esekfom::dyn_share_datastruct<double> &ekfom_data);
 
     /// Obtained from https://arxiv.org/abs/2411.06766
-    void computeConditionNumber(const Eigen::Matrix<double, Eigen::Dynamic, Eigen::Dynamic>& h_v);
+    /// publishes the condition number of the translation part of JtJ from the last observation model call
+    void PublishConditionNumber();
 
 
     ////////////////////////////// debug save / show ////////////////////////////////////////////////////////////////
@@ -83,6 +86,9 @@ class LaserMapping {
     void PointBodyLidarToIMU(PointType const *const pi, PointType *const po);
 
     void MapIncremental();
+
+    /// per-scan profiler plots and frame mark (no-op unless built with FASTER_LIO_TRACY)
+    void ProfileScan();
 
     void SubAndPubToROS();
 
@@ -113,13 +119,18 @@ class LaserMapping {
     CloudPtr scan_undistort_{new PointCloudType()};   // scan after undistortion
     CloudPtr scan_down_body_{new PointCloudType()};   // downsampled scan in body
     CloudPtr scan_down_world_{new PointCloudType()};  // downsampled scan in world
-    std::vector<PointVector> nearest_points_;         // nearest points of current scan
+    std::vector<MapPointVector> nearest_points_;      // nearest map points of current scan
     common::VV4F corr_pts_;                           // inlier pts
     common::VV4F corr_norm_;                          // inlier plane norms
     pcl::VoxelGrid<PointType> voxel_scan_;            // voxel filter for current scan
     std::vector<float> residuals_;                    // point-to-plane residuals
-    std::vector<bool> point_selected_surf_;           // selected points
+    std::vector<uint8_t> point_selected_surf_;        // selected points (not vector<bool>: written from TBB threads)
     common::VV4F plane_coef_;                         // plane coeffs
+    std::vector<common::V3F> search_pos_;             // world position of each point at its last nn search
+    std::vector<uint8_t> plane_ok_;                   // whether that search gave a valid plane
+    bool searched_this_scan_ = false;                 // an nn search already ran for the current scan
+    float nn_reuse_distance_ = 0.01f;                 // re-search a point only if it moved more than this [m]
+    std::atomic<int> nn_searches_{0};                 // points searched in the current scan (profiling)
 
     /// ros pub and sub stuffs
     ros::NodeHandle nh_;
@@ -138,6 +149,8 @@ class LaserMapping {
     // std::string tf_imu_frame_;
     // std::string tf_world_frame_;
     tf::TransformListener tf_listener_;
+    tf::StampedTransform lidar_to_base_;  // last good lidar->base_link transform
+    bool has_lidar_to_base_ = false;
 
     std::mutex mtx_buffer_;
     std::deque<double> time_buffer_;
@@ -164,6 +177,7 @@ class LaserMapping {
     int scan_num_ = 0;
     bool timediff_set_flg_ = false;
     int effect_feat_num_ = 0, frame_num_ = 0;
+    int obs_model_calls_ = 0;  // IEKF iterations of the current scan
 
     ///////////////////////// EKF inputs and output ///////////////////////////////////////////////////////
     common::MeasureGroup measures_;                    // sync IMU and lidar scan
@@ -172,6 +186,8 @@ class LaserMapping {
     vect3 pos_lidar_;                                  // lidar position after eskf update
     common::V3D euler_cur_ = common::V3D::Zero();      // rotation in euler angles
     bool extrinsic_est_en_ = true;
+    Eigen::Matrix<double, 6, 6> cond_jtj_ = Eigen::Matrix<double, 6, 6>::Zero();  // JtJ of rot/pos part of H
+    bool cond_jtj_valid_ = false;
 
     /////////////////////////  debug show / save /////////////////////////////////////////////////////////
     bool run_in_offline_ = false;
@@ -185,6 +201,8 @@ class LaserMapping {
     int pcd_save_interval_ = -1;
     bool path_save_en_ = false;
     std::string dataset_;
+    bool debug_en_ = false;  // enables per-stage timing
+    std::unique_ptr<tbb::global_control> tbb_control_;  // caps TBB worker threads when set
 
     PointCloudType::Ptr pcl_wait_save_{new PointCloudType()};  // debug save
     nav_msgs::Path path_;

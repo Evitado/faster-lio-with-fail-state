@@ -57,6 +57,13 @@ class IVoxNode {
     int KNNPointByCondition(std::vector<DistPoint>& dis_points, const PointT& point, const int& K,
                             const double& max_range);
 
+    template <typename F>
+    inline void ForEachPoint(F&& f) const {
+        for (const auto& pt : points_) {
+            f(pt);
+        }
+    }
+
    private:
     std::vector<PointT> points_;
 };

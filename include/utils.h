@@ -35,6 +35,10 @@ class Timer {
      */
     template <class F>
     static void Evaluate(F&& func, const std::string& func_name) {
+        if (!enabled_) {
+            std::forward<F>(func)();
+            return;
+        }
         auto t1 = std::chrono::high_resolution_clock::now();
         std::forward<F>(func)();
         auto t2 = std::chrono::high_resolution_clock::now();
@@ -105,8 +109,12 @@ class Timer {
     /// clean the records
     static void Clear() { records_.clear(); }
 
+    /// timing is off by default; when off, Evaluate only calls the function
+    static void SetEnabled(bool enabled) { enabled_ = enabled; }
+
    private:
     static std::map<std::string, TimerRecord> records_;
+    static bool enabled_;
 };
 
 }  // namespace faster_lio

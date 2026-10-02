@@ -8,6 +8,7 @@
 #include <tbb/parallel_for.h>
 #include "common_lib.h"
 #include "laser_mapping.h"
+#include "profiling.h"
 #include "ros/node_handle.h"
 #include "tf/transform_listener.h"
 #include "utils.h"
@@ -15,12 +16,32 @@
 #include <std_msgs/Float64.h>
 #include <pcl/console/print.h>
 
+#ifdef FASTER_LIO_TRACY
+#include <tbb/task_scheduler_observer.h>
+#endif
+
 namespace faster_lio {
+
+#ifdef FASTER_LIO_TRACY
+namespace {
+/// names TBB worker threads in the profiler
+class TbbThreadNamer : public tbb::task_scheduler_observer {
+   public:
+    TbbThreadNamer() { observe(true); }
+    void on_scheduler_entry(bool is_worker) override {
+        if (is_worker) PROFILE_THREAD_NAME("tbb worker");
+    }
+};
+}  // namespace
+#endif
 
 bool LaserMapping::InitROS(const ros::NodeHandle &nh, const ros::NodeHandle &pnh) {
     nh_ = nh;
     pnh_ = pnh;
     LoadParams();
+#ifdef FASTER_LIO_TRACY
+    static TbbThreadNamer tbb_thread_namer;  // after LoadParams, which may cap the TBB thread count
+#endif
     SubAndPubToROS();
     // localmap init (after LoadParams)
     ivox_ = std::make_shared<IVoxType>(ivox_options_);
@@ -36,6 +57,7 @@ bool LaserMapping::InitROS(const ros::NodeHandle &nh, const ros::NodeHandle &pnh
 
 bool LaserMapping::InitWithoutROS(const std::string &config_yaml) {
     LOG(INFO) << "init laser mapping from " << config_yaml;
+    Timer::SetEnabled(true);  // offline runs report per-stage timing
     if (!LoadParamsFromYAML(config_yaml)) {
         return false;
     }
@@ -50,9 +72,9 @@ bool LaserMapping::InitWithoutROS(const std::string &config_yaml) {
         [this](state_ikfom &s, esekfom::dyn_share_datastruct<double> &ekfom_data) { ObsModel(s, ekfom_data); },
         options::NUM_MAX_ITERATIONS, epsi.data());
 
-    if (std::is_same<IVoxType, IVox<3, IVoxNodeType::PHC, pcl::PointXYZI>>::value == true) {
+    if (std::is_same<IVoxType, IVox<3, IVoxNodeType::PHC, MapPointType>>::value == true) {
         LOG(INFO) << "using phc ivox";
-    } else if (std::is_same<IVoxType, IVox<3, IVoxNodeType::DEFAULT, pcl::PointXYZI>>::value == true) {
+    } else if (std::is_same<IVoxType, IVox<3, IVoxNodeType::DEFAULT, MapPointType>>::value == true) {
         LOG(INFO) << "using default ivox";
     }
 
@@ -98,6 +120,15 @@ bool LaserMapping::LoadParams() {
     nh_.param<int>("point_filter_num", preprocess_->PointFilterNum(), 2);
     nh_.param<bool>("feature_extract_enable", preprocess_->FeatureEnabled(), false);
     nh_.param<bool>("runtime_pos_log_enable", runtime_pos_log_, true);
+    nh_.param<bool>("debug_en", debug_en_, false);
+    int tbb_num_threads = 0;
+    nh_.param<int>("tbb_num_threads", tbb_num_threads, 0);
+    if (tbb_num_threads > 0) {
+        tbb_control_ = std::make_unique<tbb::global_control>(tbb::global_control::max_allowed_parallelism,
+                                                             tbb_num_threads);
+        LOG(INFO) << "TBB limited to " << tbb_num_threads << " threads";
+    }
+    Timer::SetEnabled(debug_en_);
     nh_.param<bool>("mapping/extrinsic_est_en", extrinsic_est_en_, true);
     nh_.param<bool>("pcd_save/pcd_save_en", pcd_save_en_, false);
     nh_.param<int>("pcd_save/interval", pcd_save_interval_, -1);
@@ -106,6 +137,10 @@ bool LaserMapping::LoadParams() {
 
     nh_.param<float>("ivox_grid_resolution", ivox_options_.resolution_, 0.2);
     nh_.param<int>("ivox_nearby_type", ivox_nearby_type, 18);
+    nh_.param<float>("nn_reuse_distance", nn_reuse_distance_, nn_reuse_distance_);
+    int ivox_capacity = static_cast<int>(ivox_options_.capacity_);
+    nh_.param<int>("ivox_capacity", ivox_capacity, ivox_capacity);  // max voxels kept, least recently used dropped
+    ivox_options_.capacity_ = static_cast<std::size_t>(std::max(ivox_capacity, 1));
 
     LOG(INFO) << "lidar_type " << lidar_type;
     if (lidar_type == 1) {
@@ -197,6 +232,9 @@ bool LaserMapping::LoadParamsFromYAML(const std::string &yaml_file) {
 
         ivox_options_.resolution_ = yaml["ivox_grid_resolution"].as<float>();
         ivox_nearby_type = yaml["ivox_nearby_type"].as<int>();
+        if (yaml["nn_reuse_distance"]) {
+            nn_reuse_distance_ = yaml["nn_reuse_distance"].as<float>();
+        }
     } catch (...) {
         LOG(ERROR) << "bad conversion";
         return false;
@@ -304,9 +342,11 @@ void LaserMapping::Reset() {
 }
 
 void LaserMapping::Run() {
+    PROFILE_SCOPE("LaserMapping::Run");
     if (!SyncPackages()) {
         return;
     }
+    obs_model_calls_ = 0;
 
     /// IMU process, kf prediction, undistortion
     p_imu_->Process(measures_, kf_, scan_undistort_);
@@ -329,12 +369,18 @@ void LaserMapping::Run() {
         path_.poses.clear();
         PublishPath(pub_path_);
         flg_first_scan_ = true;
+        ProfileScan();
         return;
     }
 
     /// the first scan
     if (flg_first_scan_) {
-        ivox_->AddPoints(scan_undistort_->points);
+        MapPointVector first_points;
+        first_points.reserve(scan_undistort_->size());
+        for (const auto &pt : scan_undistort_->points) {
+            first_points.emplace_back(pt.x, pt.y, pt.z);
+        }
+        ivox_->AddPoints(first_points);
         first_lidar_time_ = measures_.lidar_bag_time_;
         flg_first_scan_ = false;
         return;
@@ -344,6 +390,7 @@ void LaserMapping::Run() {
     /// downsample
     Timer::Evaluate(
         [&, this]() {
+            PROFILE_SCOPE("downsample");
             voxel_scan_.setInputCloud(scan_undistort_);
             voxel_scan_.filter(*scan_down_body_);
         },
@@ -360,10 +407,15 @@ void LaserMapping::Run() {
     residuals_.resize(cur_pts, 0);
     point_selected_surf_.resize(cur_pts, true);
     plane_coef_.resize(cur_pts, common::V4F::Zero());
+    search_pos_.resize(cur_pts);
+    plane_ok_.resize(cur_pts, 0);
+    searched_this_scan_ = false;
+    nn_searches_ = 0;
 
     // ICP and iterated Kalman filter update
     Timer::Evaluate(
         [&, this]() {
+            PROFILE_SCOPE("IEKF update");
             // iterated state estimation
             double solve_H_time = 0;
             // update the observation model, will call nn and point-to-plane residual computation
@@ -376,24 +428,24 @@ void LaserMapping::Run() {
         "IEKF Solve and Update");
 
     // update local map
-    Timer::Evaluate([&, this]() { MapIncremental(); }, "    Incremental Mapping");
+    Timer::Evaluate(
+        [&, this]() {
+            PROFILE_SCOPE("map incremental");
+            MapIncremental();
+        },
+        "    Incremental Mapping");
 
     // publish or save map pcd
+    PublishConditionNumber();
     PublishKeypoints(keypoints_pub_);
     PublishPath(pub_path_);
     if (run_in_offline_) {
         if (pcd_save_en_) {
             PublishFrameWorld();
         }
-        if (path_save_en_) {
-            PublishPath(pub_path_);
-        }
     } else {
         if (pub_odom_aft_mapped_) {
             PublishOdometry(pub_odom_aft_mapped_);
-        }
-        if (path_pub_en_ || path_save_en_) {
-            PublishPath(pub_path_);
         }
         if (scan_pub_en_ || pcd_save_en_) {
             PublishFrameWorld();
@@ -404,9 +456,23 @@ void LaserMapping::Run() {
     }
     // Debug variables
     frame_num_++;
+    ProfileScan();
+}
+
+void LaserMapping::ProfileScan() {
+    PROFILE_PLOT("scan points (preprocessed)", static_cast<int64_t>(measures_.lidar_ ? measures_.lidar_->size() : 0));
+    PROFILE_PLOT("scan points (downsampled)", static_cast<int64_t>(scan_down_body_->size()));
+    PROFILE_PLOT("effective features", static_cast<int64_t>(effect_feat_num_));
+    PROFILE_PLOT("IEKF iterations", static_cast<int64_t>(obs_model_calls_));
+    PROFILE_PLOT("nn searches", static_cast<int64_t>(nn_searches_.load()));
+    PROFILE_PLOT("map voxels", static_cast<int64_t>(ivox_->NumValidGrids()));
+    PROFILE_PLOT("lidar buffer", static_cast<int64_t>(lidar_buffer_.size()));
+    profiling::PlotProcessStats();
+    PROFILE_FRAME();
 }
 
 void LaserMapping::StandardPCLCallBack(const sensor_msgs::PointCloud2::ConstPtr &msg) {
+    PROFILE_SCOPE("lidar callback");
     mtx_buffer_.lock();
     Timer::Evaluate(
         [&, this]() {
@@ -428,6 +494,7 @@ void LaserMapping::StandardPCLCallBack(const sensor_msgs::PointCloud2::ConstPtr 
 }
 
 void LaserMapping::IMUCallBack(const sensor_msgs::Imu::ConstPtr &msg_in) {
+    PROFILE_SCOPE("imu callback");
     publish_count_++;
     sensor_msgs::Imu::Ptr msg(new sensor_msgs::Imu(*msg_in));
 
@@ -449,6 +516,7 @@ void LaserMapping::IMUCallBack(const sensor_msgs::Imu::ConstPtr &msg_in) {
 }
 
 bool LaserMapping::SyncPackages() {
+    PROFILE_SCOPE("sync packages");
     if (lidar_buffer_.empty() || imu_buffer_.empty()) {
         return false;
     }
@@ -500,8 +568,8 @@ void LaserMapping::PrintState(const state_ikfom &s) {
 }
 
 void LaserMapping::MapIncremental() {
-    PointVector points_to_add;
-    PointVector point_no_need_downsample;
+    MapPointVector points_to_add;
+    MapPointVector point_no_need_downsample;
 
     int cur_pts = scan_down_body_->size();
     points_to_add.reserve(cur_pts);
@@ -510,14 +578,24 @@ void LaserMapping::MapIncremental() {
     std::vector<size_t> index(cur_pts);
     std::iota(index.begin(), index.end(), 0.0);
 
+    // same transform as PointBodyToWorld, composed once per scan instead of per point
+    const common::M3D R_wl = state_point_.rot.toRotationMatrix() * state_point_.offset_R_L_I.toRotationMatrix();
+    const common::V3D t_wl = state_point_.rot * state_point_.offset_T_L_I + state_point_.pos;
+
     std::for_each(index.begin(), index.end(), [&](const size_t &i) {
         /* transform to world frame */
-        scan_down_world_->points[i] = PointBodyToWorld(scan_down_body_->points[i]);
+        const PointType &point_body = scan_down_body_->points[i];
+        const common::V3D p_world = R_wl * common::V3D(point_body.x, point_body.y, point_body.z) + t_wl;
+        PointType &point_world = scan_down_world_->points[i];
+        point_world = PointType();
+        point_world.x = p_world.x();
+        point_world.y = p_world.y();
+        point_world.z = p_world.z();
+        point_world.intensity = point_body.intensity;
 
         /* decide if need add to map */
-        PointType &point_world = scan_down_world_->points[i];
         if (!nearest_points_[i].empty() && flg_EKF_inited_) {
-            const PointVector &points_near = nearest_points_[i];
+            const MapPointVector &points_near = nearest_points_[i];
 
             Eigen::Vector3f center =
                 ((point_world.getVector3fMap() / filter_size_map_min_).array().floor() + 0.5) * filter_size_map_min_;
@@ -527,7 +605,7 @@ void LaserMapping::MapIncremental() {
             if (fabs(dis_2_center.x()) > 0.5 * filter_size_map_min_ &&
                 fabs(dis_2_center.y()) > 0.5 * filter_size_map_min_ &&
                 fabs(dis_2_center.z()) > 0.5 * filter_size_map_min_) {
-                point_no_need_downsample.emplace_back(point_world);
+                point_no_need_downsample.emplace_back(point_world.x, point_world.y, point_world.z);
                 return;
             }
 
@@ -543,54 +621,43 @@ void LaserMapping::MapIncremental() {
                 }
             }
             if (need_add) {
-                points_to_add.emplace_back(point_world);
+                points_to_add.emplace_back(point_world.x, point_world.y, point_world.z);
             }
         } else {
-            points_to_add.emplace_back(point_world);
+            points_to_add.emplace_back(point_world.x, point_world.y, point_world.z);
         }
     });
 
     Timer::Evaluate(
         [&, this]() {
+            PROFILE_SCOPE("ivox add points");
             ivox_->AddPoints(points_to_add);
             ivox_->AddPoints(point_no_need_downsample);
         },
         "    IVox Add Points");
 }
 
-void LaserMapping::computeConditionNumber(const Eigen::Matrix<double, Eigen::Dynamic, Eigen::Dynamic>& h_x)
-{
-    Eigen::Matrix<double, 6, 6> A = Eigen::Matrix<double, 6, 6>::Zero();
-    for (int i = 0; i < h_x.rows(); ++i)
-    {
-        /// Input is J[1x12], we get [1x6]
-        const Eigen::Matrix<double, 1, 6>& J = h_x.row(i).head<6>();
-        /// for each jacobian do JtJ and sum all of them
-        const Eigen::Matrix<double, 6, 6> JTJ = J.transpose() * J;
-        A += JTJ;
+void LaserMapping::PublishConditionNumber() {
+    PROFILE_SCOPE("publish condition number");
+    if (!cond_jtj_valid_) {
+        return;
     }
     /// Extract only the translation part becoming 3x3 = C
-    const Eigen::Matrix<double, 3, 3> C = A.topLeftCorner<3, 3>();
-    /// CTC
+    const Eigen::Matrix<double, 3, 3> C = cond_jtj_.topLeftCorner<3, 3>();
+    /// CTC is symmetric, so its eigenvalues are real
     const Eigen::Matrix<double, 3, 3> CTC = C.transpose() * C;
-
-    /// Compute eigenvalues
-    Eigen::EigenSolver<Eigen::Matrix3d> solver(CTC);
-    Eigen::Vector3d eigenvalues = solver.eigenvalues().real();
-
-    /// Get max and min eigenvalues
-    double min_eigenvalue = eigenvalues.minCoeff();
-    double max_eigenvalue = eigenvalues.maxCoeff();
+    Eigen::SelfAdjointEigenSolver<Eigen::Matrix3d> solver(CTC, Eigen::EigenvaluesOnly);
+    const Eigen::Vector3d &eigenvalues = solver.eigenvalues();
 
     /// Compute condition number
     /// Adding a small constant to the denominator to avoid dividing by a very small number
-    const auto condition_number = sqrt(max_eigenvalue/(min_eigenvalue + 1e-7));
+    const auto condition_number = sqrt(eigenvalues.maxCoeff() / (eigenvalues.minCoeff() + 1e-7));
 
     std_msgs::Float64 msg;
     msg.data = condition_number;
     pub_cond_number.publish(msg);
-    return;
 }
+
 /**
  * Lidar point cloud registration
  * will be called by the eskf custom observation model
@@ -599,21 +666,24 @@ void LaserMapping::computeConditionNumber(const Eigen::Matrix<double, Eigen::Dyn
  * @param ekfom_data H matrix
  */
 void LaserMapping::ObsModel(state_ikfom &s, esekfom::dyn_share_datastruct<double> &ekfom_data) {
+    PROFILE_SCOPE("ObsModel");
+    ++obs_model_calls_;
     int cnt_pts = scan_down_body_->size();
-
-    std::vector<size_t> index(cnt_pts);
-    std::iota(index.begin(), index.end(), 0);
-    // for (size_t i = 0; i < index.size(); ++i) {
-    // index[i] = i;
-    // }
+    cond_jtj_valid_ = false;
 
     /// Computes point to plane distances
     Timer::Evaluate(
         [&, this]() {
             auto R_wl = (s.rot * s.offset_R_L_I).cast<float>();
             auto t_wl = (s.rot * s.offset_T_L_I + s.pos).cast<float>();
+            // The map does not change between IEKF iterations, so a point that moved less than nn_reuse_distance_
+            // since its last search keeps its neighbours and plane; only its residual is recomputed.
+            const bool may_reuse = searched_this_scan_ && nn_reuse_distance_ > 0;
+            const float reuse_dist2 = nn_reuse_distance_ * nn_reuse_distance_;
 
             tbb::parallel_for(tbb::blocked_range<int>(0, cnt_pts), [&](tbb::blocked_range<int> r) {
+                PROFILE_SCOPE("nn search + plane fit");
+                int searched = 0;
                 for (auto i = r.begin(); i < r.end(); ++i) {
                     // TODO: these non const should die
                     const PointType &point_body = scan_down_body_->points[i];
@@ -626,14 +696,23 @@ void LaserMapping::ObsModel(state_ikfom &s, esekfom::dyn_share_datastruct<double
                     scan_down_world_->points[i] = point_world;
 
                     if (ekfom_data.converge) {
-                        /** Find the closest surfaces in the map **/
-                        PointVector points_near;
-                        ivox_->GetClosestPoint(point_world, points_near, options::NUM_MATCH_POINTS);
-                        nearest_points_[i] = points_near;
-                        point_selected_surf_[i] = points_near.size() >= options::MIN_NUM_MATCH_POINTS;
-                        if (point_selected_surf_[i]) {
-                            point_selected_surf_[i] =
-                                common::esti_plane(plane_coef_[i], points_near, options::ESTI_PLANE_THRESHOLD);
+                        const common::V3F p_world = point_world.getVector3fMap();
+                        if (may_reuse && (p_world - search_pos_[i]).squaredNorm() < reuse_dist2) {
+                            point_selected_surf_[i] = plane_ok_[i];
+                        } else {
+                            /** Find the closest surfaces in the map **/
+                            // search straight into the per-point buffer, it keeps its capacity across scans
+                            MapPointVector &points_near = nearest_points_[i];
+                            ivox_->GetClosestPoint(MapPointType(point_world.x, point_world.y, point_world.z),
+                                                   points_near, options::NUM_MATCH_POINTS);
+                            point_selected_surf_[i] = points_near.size() >= options::MIN_NUM_MATCH_POINTS;
+                            if (point_selected_surf_[i]) {
+                                point_selected_surf_[i] =
+                                    common::esti_plane(plane_coef_[i], points_near, options::ESTI_PLANE_THRESHOLD);
+                            }
+                            plane_ok_[i] = point_selected_surf_[i];
+                            search_pos_[i] = p_world;
+                            ++searched;
                         }
                     }
 
@@ -649,7 +728,11 @@ void LaserMapping::ObsModel(state_ikfom &s, esekfom::dyn_share_datastruct<double
                         }
                     }
                 }
+                nn_searches_ += searched;
             });
+            if (ekfom_data.converge) {
+                searched_this_scan_ = true;
+            }
         },
         "    ObsModel (Lidar Match)");
 
@@ -671,71 +754,115 @@ void LaserMapping::ObsModel(state_ikfom &s, esekfom::dyn_share_datastruct<double
 
     if (effect_feat_num_ < 1) {
         ekfom_data.valid = false;
+        ekfom_data.has_HTH = false;
         LOG(WARNING) << "No Effective Points!";
         return;
     }
 
     Timer::Evaluate(
         [&, this]() {
-            /*** Computation of Measurement Jacobian matrix H and measurements vector ***/
-            ekfom_data.h_x = Eigen::MatrixXd::Zero(effect_feat_num_, 12);  // 23
-            ekfom_data.h.resize(effect_feat_num_);
+            /*** Measurement Jacobian H (one 1x12 row per point) and measurements h, accumulated straight into
+             *   H^T H and H^T h. The filter only needs the full H when it has fewer rows than states. ***/
+            const bool need_full_h = effect_feat_num_ < state_ikfom::DOF;
+            if (need_full_h) {
+                ekfom_data.h_x = Eigen::MatrixXd::Zero(effect_feat_num_, 12);  // 23
+                ekfom_data.h.resize(effect_feat_num_);
+            }
 
-            index.resize(effect_feat_num_);
             /// Rotation lidar to IMU
             const common::M3F off_R = s.offset_R_L_I.toRotationMatrix().cast<float>();
             /// Translation lidar to IMU
             const common::V3F off_t = s.offset_T_L_I.cast<float>();
             const common::M3F Rt = s.rot.toRotationMatrix().transpose().cast<float>();
 
-            tbb::parallel_for(tbb::blocked_range<int>(0, index.size()), [&](tbb::blocked_range<int> r) {
-                for (auto i = r.begin(); i < r.end(); ++i) {
-                    common::V3F point_this_be = corr_pts_[i].head<3>();
-                    common::M3F point_be_crossmat = SKEW_SYM_MATRIX(point_this_be);
-                    common::V3F point_this = off_R * point_this_be + off_t;
-                    common::M3F point_crossmat = SKEW_SYM_MATRIX(point_this);
+            // fixed-size chunks summed in order afterwards, so the result does not depend on the thread count
+            constexpr int kChunk = 256;
+            const int num_chunks = (effect_feat_num_ + kChunk - 1) / kChunk;
+            std::vector<Eigen::Matrix<double, 12, 12>, Eigen::aligned_allocator<Eigen::Matrix<double, 12, 12>>>
+                chunk_HTH(num_chunks);
+            std::vector<Eigen::Matrix<double, 12, 1>, Eigen::aligned_allocator<Eigen::Matrix<double, 12, 1>>>
+                chunk_HTh(num_chunks);
 
-                    /*** get the normal vector of closest surface/corner ***/
-                    common::V3F norm_vec = corr_norm_[i].head<3>();
+            tbb::parallel_for(tbb::blocked_range<int>(0, num_chunks), [&](tbb::blocked_range<int> r) {
+                PROFILE_SCOPE("jacobian + HTH");
+                for (int c = r.begin(); c < r.end(); ++c) {
+                    Eigen::Matrix<double, 12, 12> HTH = Eigen::Matrix<double, 12, 12>::Zero();
+                    Eigen::Matrix<double, 12, 1> HTh = Eigen::Matrix<double, 12, 1>::Zero();
+                    const int end = std::min(effect_feat_num_, (c + 1) * kChunk);
+                    for (int i = c * kChunk; i < end; ++i) {
+                        common::V3F point_this_be = corr_pts_[i].head<3>();
+                        common::M3F point_be_crossmat = SKEW_SYM_MATRIX(point_this_be);
+                        common::V3F point_this = off_R * point_this_be + off_t;
+                        common::M3F point_crossmat = SKEW_SYM_MATRIX(point_this);
 
-                    /*** calculate the Measurement Jacobian matrix H ***/
-                    common::V3F C(Rt * norm_vec);
-                    common::V3F A(point_crossmat * C);
+                        /*** get the normal vector of closest surface/corner ***/
+                        common::V3F norm_vec = corr_norm_[i].head<3>();
 
-                    if (extrinsic_est_en_) {
-                        common::V3F B(point_be_crossmat * off_R.transpose() * C);
-                        ekfom_data.h_x.block<1, 12>(i, 0) << norm_vec[0], norm_vec[1], norm_vec[2], A[0], A[1], A[2],
-                            B[0], B[1], B[2], C[0], C[1], C[2];
-                    } else {
-                        ekfom_data.h_x.block<1, 12>(i, 0) << norm_vec[0], norm_vec[1], norm_vec[2], A[0], A[1], A[2],
-                            0.0, 0.0, 0.0, 0.0, 0.0, 0.0;
+                        /*** calculate the Measurement Jacobian matrix H ***/
+                        common::V3F C(Rt * norm_vec);
+                        common::V3F A(point_crossmat * C);
+
+                        Eigen::Matrix<double, 12, 1> J;
+                        if (extrinsic_est_en_) {
+                            common::V3F B(point_be_crossmat * off_R.transpose() * C);
+                            J << norm_vec.cast<double>(), A.cast<double>(), B.cast<double>(), C.cast<double>();
+                        } else {
+                            J << norm_vec.cast<double>(), A.cast<double>(), Eigen::Matrix<double, 6, 1>::Zero();
+                        }
+
+                        /*** Measurement: distance to the closest surface/corner ***/
+                        const double z = -corr_pts_[i][3];
+
+                        HTH.noalias() += J * J.transpose();
+                        HTh.noalias() += J * z;
+                        if (need_full_h) {
+                            ekfom_data.h_x.row(i) = J.transpose();
+                            ekfom_data.h(i) = z;
+                        }
                     }
-
-                    /*** Measurement: distance to the closest surface/corner ***/
-                    ekfom_data.h(i) = -corr_pts_[i][3];
+                    chunk_HTH[c] = HTH;
+                    chunk_HTh[c] = HTh;
                 }
             });
+
+            ekfom_data.HTH.setZero();
+            ekfom_data.HTh.setZero();
+            for (int c = 0; c < num_chunks; ++c) {
+                ekfom_data.HTH += chunk_HTH[c];
+                ekfom_data.HTh += chunk_HTh[c];
+            }
+            ekfom_data.dof = effect_feat_num_;
+            ekfom_data.has_HTH = !need_full_h;
         },
         "    ObsModel (IEKF Build Jacobian)");
-    computeConditionNumber(ekfom_data.h_x);
+
+    /// JtJ of the rotation/position columns, published once per scan after the filter converged
+    cond_jtj_ = ekfom_data.HTH.topLeftCorner<6, 6>();
+    cond_jtj_valid_ = true;
 }
 
 /////////////////////////////////////  debug save / show /////////////////////////////////////////////////////
 
 void LaserMapping::PublishPath(const ros::Publisher pub_path) {
+    PROFILE_SCOPE("publish path");
     SetPosestamp(msg_body_pose_);
     msg_body_pose_.header.stamp = ros::Time().fromSec(lidar_end_time_);
     msg_body_pose_.header.frame_id = global_frame_;
 
     /*** if path is too large, the rvis will crash ***/
     path_.poses.push_back(msg_body_pose_);
-    if (run_in_offline_ == false) {
+    // the whole path is serialized on every publish, so skip it when nobody listens
+    if (run_in_offline_ == false && pub_path.getNumSubscribers() > 0) {
         pub_path.publish(path_);
     }
 }
 
 void LaserMapping::PublishKeypoints(const ros::Publisher &pubLaserCloudFull) {
+    PROFILE_SCOPE("publish keypoints");
     // ROS_INFO("Internally the keypoints size is %zu", feats_down_body->size());
+    if (pubLaserCloudFull.getNumSubscribers() == 0) {
+        return;
+    }
     sensor_msgs::PointCloud2 laserCloudmsg;
     pcl::toROSMsg(*scan_down_world_, laserCloudmsg);
     laserCloudmsg.header.stamp = ros::Time().fromSec(lidar_end_time_);
@@ -743,44 +870,40 @@ void LaserMapping::PublishKeypoints(const ros::Publisher &pubLaserCloudFull) {
     pubLaserCloudFull.publish(laserCloudmsg);
 }
 void LaserMapping::PublishOdometry(const ros::Publisher &pub_odom_aft_mapped) {
-    // TODO: change this
+    PROFILE_SCOPE("publish odometry + tf");
+    // The odometry message carries the estimated sensor pose, so it is labelled with lidar_frame_. The TF tree
+    // keeps base_link as the parent of the lidar link: we broadcast global_frame_ -> base_link_frame_ and
+    // downstream nodes look up anything else through TF.
+
+    // lidar -> base_link can change at runtime, so look it up every scan without blocking and keep the last good one
+    try {
+        tf_listener_.lookupTransform(lidar_frame_, base_link_frame_, ros::Time(0), lidar_to_base_);
+        has_lidar_to_base_ = true;
+    } catch (const tf::TransformException &ex) {
+        ROS_WARN_THROTTLE(5.0, "%s%s", has_lidar_to_base_ ? "using last known lidar->base_link, " : "", ex.what());
+    }
 
     static tf::TransformBroadcaster br;
-    if (!lidar_odom_) {
-        // Broadcast the tf
-        geometry_msgs::TransformStamped transform_msg;
-        transform_msg.header.stamp = ros::Time().fromSec(lidar_end_time_);
-        transform_msg.header.frame_id = global_frame_;
-        transform_msg.child_frame_id = base_link_frame_;
-        transform_msg.transform.rotation.x = 0;
-        transform_msg.transform.rotation.y = 0;
-        transform_msg.transform.rotation.z = 0;
-        transform_msg.transform.rotation.w = 1;
-        transform_msg.transform.translation.x = 0;
-        transform_msg.transform.translation.y = 0;
-        transform_msg.transform.translation.z = 0;
-        br.sendTransform(transform_msg);
+    const ros::Time stamp = ros::Time().fromSec(lidar_end_time_);
+    odom_aft_mapped_.header.stamp = stamp;
+    odom_aft_mapped_.header.frame_id = global_frame_;
+    odom_aft_mapped_.child_frame_id = lidar_frame_;
 
-        // publish odometry msg as Identity
-        odom_aft_mapped_.header.stamp = ros::Time().fromSec(lidar_end_time_);
-        odom_aft_mapped_.header.frame_id = global_frame_;
-        odom_aft_mapped_.child_frame_id = base_link_frame_;
-        odom_aft_mapped_.pose.pose.orientation.x = 0;
-        odom_aft_mapped_.pose.pose.orientation.y = 0;
-        odom_aft_mapped_.pose.pose.orientation.z = 0;
-        odom_aft_mapped_.pose.pose.orientation.w = 1;
-        odom_aft_mapped_.pose.pose.position.x = 0;
-        odom_aft_mapped_.pose.pose.position.y = 0;
-        odom_aft_mapped_.pose.pose.position.z = 0;
+    if (!lidar_odom_) {
+        // odometry stopped: the base sits at the origin, the sensor pose follows from the mount
+        tf::Transform base_to_lidar = tf::Transform::getIdentity();
+        if (has_lidar_to_base_) {
+            base_to_lidar = lidar_to_base_.inverse();
+        }
+        br.sendTransform(tf::StampedTransform(tf::Transform::getIdentity(), stamp, global_frame_, base_link_frame_));
+
+        tf::poseTFToMsg(base_to_lidar, odom_aft_mapped_.pose.pose);
+        odom_aft_mapped_.pose.covariance.fill(0.0);
         pub_odom_aft_mapped.publish(odom_aft_mapped_);
         return;
     }
-    odom_aft_mapped_.header.frame_id = global_frame_;
-    // TODO: think about this
-    odom_aft_mapped_.child_frame_id = base_link_frame_;
-    odom_aft_mapped_.header.stamp = ros::Time().fromSec(lidar_end_time_);
+
     SetPosestamp(odom_aft_mapped_.pose);
-    pub_odom_aft_mapped.publish(odom_aft_mapped_);
     auto P = kf_.get_P();
     for (int i = 0; i < 6; i++) {
         int k = i < 3 ? i + 3 : i - 3;
@@ -791,28 +914,14 @@ void LaserMapping::PublishOdometry(const ros::Publisher &pub_odom_aft_mapped) {
         odom_aft_mapped_.pose.covariance[i * 6 + 4] = P(k, 1);
         odom_aft_mapped_.pose.covariance[i * 6 + 5] = P(k, 2);
     }
+    pub_odom_aft_mapped.publish(odom_aft_mapped_);
 
-    tf::Transform transform;
-    tf::Quaternion q;
-    transform.setOrigin(tf::Vector3(odom_aft_mapped_.pose.pose.position.x, odom_aft_mapped_.pose.pose.position.y,
-                                    odom_aft_mapped_.pose.pose.position.z));
-    q.setW(odom_aft_mapped_.pose.pose.orientation.w);
-    q.setX(odom_aft_mapped_.pose.pose.orientation.x);
-    q.setY(odom_aft_mapped_.pose.pose.orientation.y);
-    q.setZ(odom_aft_mapped_.pose.pose.orientation.z);
-    transform.setRotation(q);
-
-    tf::StampedTransform sensor2tug;
-    try {
-        tf_listener_.waitForTransform(lidar_frame_, base_link_frame_, ros::Time(0), ros::Duration(3.0));
-        tf_listener_.lookupTransform(lidar_frame_, base_link_frame_, ros::Time(0), sensor2tug);
-
-        tf::Transform odom2tug = transform * sensor2tug;
-        br.sendTransform(
-            tf::StampedTransform(odom2tug, ros::Time().fromSec(lidar_end_time_), global_frame_, base_link_frame_));
-    } catch (tf::TransformException ex) {
-        ROS_ERROR("%s", ex.what());
+    if (!has_lidar_to_base_) {
+        return;
     }
+    tf::Transform odom_to_lidar;
+    tf::poseMsgToTF(odom_aft_mapped_.pose.pose, odom_to_lidar);
+    br.sendTransform(tf::StampedTransform(odom_to_lidar * lidar_to_base_, stamp, global_frame_, base_link_frame_));
 }
 
 void LaserMapping::PublishFrameWorld() {
