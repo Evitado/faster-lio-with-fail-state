@@ -140,7 +140,7 @@ class LaserMapping {
     tf::TransformListener tf_listener_;
 
     std::mutex mtx_buffer_;
-    std::deque<double> time_buffer_;
+    std::deque<ros::Time> time_buffer_;  // scan header stamps, kept as ros::Time so outputs keep exact ns
     std::deque<PointCloudType::Ptr> lidar_buffer_;
     std::deque<sensor_msgs::Imu::ConstPtr> imu_buffer_;
     nav_msgs::Odometry odom_aft_mapped_;
@@ -150,6 +150,9 @@ class LaserMapping {
     double timediff_lidar_wrt_imu_ = 0.0;
     double last_timestamp_lidar_ = 0;
     double lidar_end_time_ = 0;
+    // lidar_end_time_ as an exact stamp: the scan header stamp plus the scan duration, without a round trip
+    // through double seconds (which shifts nanosecond stamps by up to ~120 ns). Used for all published stamps.
+    ros::Time lidar_end_stamp_;
     double last_timestamp_imu_ = -1.0;
     double first_lidar_time_ = 0.0;
     bool lidar_pushed_ = false;
