@@ -763,7 +763,9 @@ void LaserMapping::PublishOdometry(const ros::Publisher &pub_odom_aft_mapped) {
         transform_msg.transform.translation.z = 0;
         br.sendTransform(transform_msg);
 
-        // publish odometry msg as Identity
+        // publish odometry msg as Identity, labelled base_link_frame_ like the TF above (it is
+        // odom -> base_link_frame_). Kept publishing so fail_state can still evaluate and restart
+        // the LIO; consumers that need live odometry skip messages with this label.
         odom_aft_mapped_.header.stamp = lidar_end_stamp_;
         odom_aft_mapped_.header.frame_id = global_frame_;
         odom_aft_mapped_.child_frame_id = base_link_frame_;
@@ -778,8 +780,10 @@ void LaserMapping::PublishOdometry(const ros::Publisher &pub_odom_aft_mapped) {
         return;
     }
     odom_aft_mapped_.header.frame_id = global_frame_;
-    // TODO: think about this
-    odom_aft_mapped_.child_frame_id = base_link_frame_;
+    // The pose is the sensor pose (the TF below appends sensor -> base_link_frame_), so label it
+    // lidar_frame_. Consumers also use the label to tell live odometry from the identity that is
+    // published (labelled base_link_frame_) while the LIO is stopped.
+    odom_aft_mapped_.child_frame_id = lidar_frame_;
     odom_aft_mapped_.header.stamp = lidar_end_stamp_;
     SetPosestamp(odom_aft_mapped_.pose);
     pub_odom_aft_mapped.publish(odom_aft_mapped_);
