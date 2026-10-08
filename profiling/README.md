@@ -1,75 +1,73 @@
 # Profiling faster-lio with Tracy
 
-faster-lio can be instrumented with [Tracy](https://github.com/wolfpld/tracy), the profiler evitado_common already
-vendors (`evitado_common/foreign/tracy`). A run is recorded into a `.tracy` file that you open afterwards in the Tracy
-viewer. Nothing has to be watched live.
+Every build of faster-lio (catkin and the nix package deployed to the vehicle) contains a dormant
+[Tracy](https://github.com/wolfpld/tracy) client. With profiling off (the default) nothing of it runs: no thread, no
+socket, each instrumented spot is a check of one bool. With profiling on, the node starts `tracy-capture` itself and
+writes a `.tracy` file that you copy off the machine and open in the Tracy viewer.
 
-The recording shows:
+## On the target
 
-- **Zones:** per-scan timeline of every pipeline stage (preprocess, undistort, downsample, IEKF, ObsModel, map update,
-  publishers), including the TBB worker threads.
-- **Frames:** one frame per processed scan, so frame times are scan latencies.
-- **Plots:**
-  - `process cpu [cores]`: CPU used by the node, where 1.0 means one fully busy core.
-  - `CPU usage`: Tracy's whole-machine CPU, all processes.
-  - `process rss`, `process threads`, and `system mem available` (what is left for everything else).
-  - Per-scan point counts, effective features, IEKF iterations and map voxels.
-- **Memory:** every `operator new`/`delete` of the process, with live memory over time. Eigen-aligned buffers
-  (pcl point storage) use `malloc` and are not tracked individually; `process rss` covers them.
+Switch it on with the launch args of `launch/evitado.launch`:
 
-## 1. Build the capture tools (once)
+| arg | default | |
+|---|---|---|
+| `profiling_enable` | `$FASTER_LIO_PROFILING`, else `false` | record a trace |
+| `profiling_save_path` | `$FASTER_LIO_PROFILING_PATH`, else `/home/evitado/ssd/odometry/profiling` | folder for the trace, created if missing |
+| `profiling_port` | `8186` | localhost port between the node and its recorder |
 
-```sh
-nix build -f profiling/tracy-tools.nix -o profiling/tracy-tools
-```
-
-This builds `tracy-capture`, `tracy-csvexport` (and a viewer, `tracy`) from the same Tracy commit as the client.
-The Tracy 0.11.1 packaged in nixpkgs uses an older protocol and cannot read these traces.
-
-## 2. Build faster-lio with profiling
+The environment variables reach the node even when the stack launches `evitado.launch` from another launch file
+without passing args (as `evitado_vdb_mapping/launch/mapping.launch` does):
 
 ```sh
-catkin build faster_lio --cmake-args -DFASTER_LIO_TRACY=ON    # profiling build
-catkin build faster_lio --cmake-args -DFASTER_LIO_TRACY=OFF   # back to the normal build (the option is cached)
+FASTER_LIO_PROFILING=true roslaunch evitado_vdb_mapping mapping.launch
+# or directly
+roslaunch faster_lio evitado.launch profiling_enable:=true profiling_save_path:=/home/evitado/ssd/odometry/profiling
 ```
 
-`-DFASTER_LIO_TRACY_MEMORY=OFF` keeps the zones but drops the per-allocation memory tracking.
+The node logs `profiling: recording to <file>` at startup. Stop the stack normally (Ctrl-C, roslaunch shutdown): the
+node sends its last data, `tracy-capture` writes
 
-In a profiling build, Tracy buffers data in memory until a recorder connects, so do not deploy it. The node logs
-`PROFILING BUILD` at startup.
+```
+<profiling_save_path>/faster_lio_<YYYY-mm-dd_HH-MM-SS>.tracy
+<profiling_save_path>/faster_lio_<YYYY-mm-dd_HH-MM-SS>.capture.log
+```
 
-## 3. Record
+and exits. A killed node (SIGKILL) loses the trace. A trace takes roughly 15 MB per hour of driving.
 
-Benchmark on a bag in real time. This launches `evitado.launch`, starts LIO, plays the bag and records:
+Copy it off, e.g. `scp evitado@<vehicle>:/home/evitado/ssd/odometry/profiling/*.tracy .`
+
+## Viewing
+
+Open the file in a Tracy viewer built from the same commit as the client (protocol 72; the Tracy 0.11.1 in nixpkgs
+cannot read it). From this package:
 
 ```sh
-# roscore must be running
-profiling/profile_bag.sh -b run.bag                                   # bag with /main/ac_filtered_points, /main/imu
-profiling/profile_bag.sh -b raw.bag -l /lidar1/points -i /lidar1/imu -t   # other topics; -t: identity lidar TF
+nix build -f profiling/tracy-tools.nix -o profiling/tracy-tools   # tracy (viewer), tracy-capture, tracy-csvexport
+profiling/tracy-tools/bin/tracy faster_lio_<date>.tracy
+python3 profiling/summarize.py faster_lio_<date>.tracy           # text summary: time per stage, cpu, memory
 ```
 
-Or record any way of starting the node, for example the full stack on the vehicle:
+What the trace shows:
+
+- **Frames:** one per processed scan, so frame times are scan latencies.
+- **Zones:** the pipeline stages of each scan (preprocess, undistort, downsample, IEKF update, ObsModel, map update,
+  publishers) and the ROS loop (`ros::spinOnce`, `idle (rate.sleep)`).
+- **Plots:** `process cpu [cores]` (1.0 = one busy core), `process rss`, `process threads`, `system mem available`
+  (what the rest of the stack has left), and per scan: points, effective features, IEKF iterations, nn searches, map
+  voxels, lidar buffer length.
+
+The recording is the faster-lio process; `system mem available` and the timing of `ros::spinOnce` / `idle` show how
+it fits into the rest of the stack. Context switches and sampling are compiled out (they need root or kernel
+tracing permissions), so the trace looks the same on every machine.
+
+## On a desktop, from a bag
 
 ```sh
-profiling/record.sh -o lio.tracy -- roslaunch evitado_vdb_mapping mapping.launch
+# roscore running; -t publishes an identity lidar -> base TF for bags without /tf_static
+profiling/profile_bag.sh -b run.bag                                    # /main/ac_filtered_points, /main/imu
+profiling/profile_bag.sh -b raw.bag -l /lidar1/points -i /lidar1/imu -t
 ```
 
-Stop with Ctrl-C. Either way, the trace lands in `Log/faster_lio_<date>.tracy` (or `-o`) and a text summary is
-printed. `python3 profiling/summarize.py <file>.tracy` reprints it.
-
-## 4. View
-
-Open the `.tracy` file in a Tracy viewer **0.12 or newer** (File → Open), for example a release build from
-<https://github.com/wolfpld/tracy/releases> on any machine. Useful views:
-
-- **Timeline:** scans as frames, with stages nested under `LaserMapping::Run` and TBB workers on their own rows.
-- **Find zone / Statistics:** time distribution per stage.
-- **Plots** under the timeline: cpu, rss, available memory, point counts.
-- **Memory:** allocations, live memory and leaks over time.
-
-### Seeing other processes
-
-Tracy can also record context switches and which process ran on each core, to show who faster-lio competes with.
-That needs kernel tracing permissions for the profiled process: run the node as root, or relax them for the session
-with `sudo sysctl kernel.perf_event_paranoid=-1` and read access to `/sys/kernel/tracing`. Without them, the CPU
-usage plots above still work.
+It plays the bag in real time with profiling on, writes the trace to `Log/` (or `-d <dir>`) and prints the summary.
+A catkin build finds the recorder at `profiling/tracy-tools/bin/tracy-capture` (build it as above), otherwise
+`tracy-capture` from `PATH`; the nix package brings its own.

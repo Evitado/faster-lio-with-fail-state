@@ -4,6 +4,12 @@
     <arg name="base_link_frame" default="base_footprint_tug" />
     <arg name="lidar_frame" default="main_sensor_lidar" />
     <arg name="global_frame" default="odom" />
+    <!-- profiling (profiling/README.md): Tracy trace of the node, saved as <profiling_save_path>/faster_lio_<date>.tracy
+         when the node exits; the folder is created if missing. The env vars let a launch that includes this file
+         without passing args switch it on, e.g. FASTER_LIO_PROFILING=true roslaunch ... -->
+    <arg name="profiling_enable" default="$(optenv FASTER_LIO_PROFILING false)" />
+    <arg name="profiling_save_path" default="$(optenv FASTER_LIO_PROFILING_PATH /home/evitado/ssd/odometry/profiling)" />
+    <arg name="profiling_port" default="8186" />
     <rosparam command="load" file="$(find faster_lio)/config/ouster128.yaml" />
 
     <param name="max_iteration" type="int" value="3" />
@@ -17,5 +23,8 @@
       <param name="base_link_frame" value="$(arg base_link_frame)" />
       <param name="lidar_frame" value="$(arg lidar_frame)" />
       <param name="global_frame" value="$(arg global_frame)" />
+      <param name="profiling_enable" type="bool" value="$(arg profiling_enable)" />
+      <param name="profiling_save_path" value="$(arg profiling_save_path)" />
+      <param name="profiling_port" type="int" value="$(arg profiling_port)" />
     </node>
 </launch>

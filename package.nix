@@ -14,7 +14,15 @@
   std-srvs,
   tbb_2022_0,
   tf,
+  # workspace flake's locked nixpkgs-unstable (unstableOverlay); without it tracy-tools.nix uses the same pinned rev
+  unstable ? null,
 }:
+let
+  # recorder started by ~profiling_enable, built from the same Tracy commit as the client compiled in below
+  tracyCapture = import ./profiling/tracy-tools.nix (
+    { captureOnly = true; } // lib.optionalAttrs (unstable != null) { pkgs = unstable; }
+  );
+in
 buildRosPackage rec {
   pname = "ros-noetic-faster-lio";
   version = "0.0.0";
@@ -39,6 +47,10 @@ buildRosPackage rec {
     tf
   ];
   nativeBuildInputs = [ catkin ];
+  cmakeFlags = [
+    "-DFASTER_LIO_TRACY_DIR=${tracyCapture.tracySrc}"
+    "-DFASTER_LIO_TRACY_CAPTURE=${tracyCapture}/bin/tracy-capture"
+  ];
 
   meta = {
     description = "FasterLIO is developed from FastLIO2, see related paper: Chunge Bai et al. Faster-LIO: Lightweight Tightly

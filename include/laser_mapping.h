@@ -12,6 +12,7 @@
 #include <mutex>
 
 #include "common_lib.h"
+#include "faster_lio/SaveTrajectory.h"
 #include "imu_processing.hpp"
 #include "ivox3d/ivox3d.h"
 #include "options.h"
@@ -31,6 +32,7 @@ class LaserMapping {
     // services
     bool startLIO(std_srvs::Empty::Request &req, std_srvs::Empty::Response &res);
     bool stopLIO(std_srvs::Empty::Request &req, std_srvs::Empty::Response &res);
+    bool saveTrajectory(faster_lio::SaveTrajectory::Request &req, faster_lio::SaveTrajectory::Response &res);
 
     // callbacks of lidar and imu
     void StandardPCLCallBack(const sensor_msgs::PointCloud2::ConstPtr &msg);
@@ -112,6 +114,7 @@ class LaserMapping {
     ros::Publisher pub_cond_number;
     ros::ServiceServer start_lio_service_;
     ros::ServiceServer stop_lio_service_;
+    ros::ServiceServer save_trajectory_service_;
     tf::TransformListener tf_listener_;
     tf::StampedTransform lidar_to_base_;  // last good lidar->base_link transform
     bool has_lidar_to_base_ = false;
@@ -152,6 +155,15 @@ class LaserMapping {
     std::unique_ptr<tbb::global_control> tbb_control_;  // caps TBB worker threads when set
 
     nav_msgs::Path path_;
+
+    /// odometry pose of every scan since the last start_lidar_odom, written out by the save_trajectory service
+    struct TrajectoryPose {
+        double stamp;
+        common::V3D pos;
+        Eigen::Quaterniond rot;
+    };
+    std::vector<TrajectoryPose> trajectory_;
+    std::string trajectory_file_;  // default output of save_trajectory
     geometry_msgs::PoseStamped msg_body_pose_;
 
     // toggled by the start/stop services

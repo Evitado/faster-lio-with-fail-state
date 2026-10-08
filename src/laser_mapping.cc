@@ -5,36 +5,18 @@
 #include <tbb/parallel_for.h>
 #include <tf/transform_broadcaster.h>
 #include <algorithm>
+#include <cstdio>
+#include <filesystem>
 #include <numeric>
 
 #include "profiling.h"
 
-#ifdef FASTER_LIO_TRACY
-#include <tbb/task_scheduler_observer.h>
-#endif
-
 namespace faster_lio {
-
-#ifdef FASTER_LIO_TRACY
-namespace {
-/// names TBB worker threads in the profiler
-class TbbThreadNamer : public tbb::task_scheduler_observer {
-   public:
-    TbbThreadNamer() { observe(true); }
-    void on_scheduler_entry(bool is_worker) override {
-        if (is_worker) PROFILE_THREAD_NAME("tbb worker");
-    }
-};
-}  // namespace
-#endif
 
 bool LaserMapping::InitROS(const ros::NodeHandle &nh, const ros::NodeHandle &pnh) {
     nh_ = nh;
     pnh_ = pnh;
     LoadParams();
-#ifdef FASTER_LIO_TRACY
-    static TbbThreadNamer tbb_thread_namer;  // after LoadParams, which may cap the TBB thread count
-#endif
     SubAndPubToROS();
     // localmap init (after LoadParams)
     ivox_ = std::make_shared<IVoxType>(ivox_options_);
@@ -58,6 +40,7 @@ bool LaserMapping::LoadParams() {
     pnh_.param<std::string>("base_link_frame", base_link_frame_, "base_footprint_tug");
     pnh_.param<std::string>("lidar_frame", lidar_frame_, "main_sensor_lidar");
     pnh_.param<std::string>("global_frame", global_frame_, "world");
+    pnh_.param<std::string>("trajectory_file", trajectory_file_, "");
     nh_.param<bool>("publish/scan_publish_en", scan_pub_en_, true);
     nh_.param<bool>("publish/dense_publish_en", dense_pub_en_, false);
     nh_.param<bool>("publish/scan_bodyframe_pub_en", scan_body_pub_en_, true);
@@ -142,6 +125,7 @@ void LaserMapping::SubAndPubToROS() {
 
     start_lio_service_ = pnh_.advertiseService("start_lidar_odom", &LaserMapping::startLIO, this);
     stop_lio_service_ = pnh_.advertiseService("stop_lidar_odom", &LaserMapping::stopLIO, this);
+    save_trajectory_service_ = pnh_.advertiseService("save_trajectory", &LaserMapping::saveTrajectory, this);
 }
 
 LaserMapping::LaserMapping() {
@@ -151,6 +135,7 @@ LaserMapping::LaserMapping() {
 
 bool LaserMapping::startLIO(std_srvs::Empty::Request &req, std_srvs::Empty::Response &res) {
     path_.poses.clear();
+    trajectory_.clear();
     lidar_odom_ = true;
     ROS_INFO("Starting Lidar Odometry ..............!");
     return true;
@@ -158,6 +143,37 @@ bool LaserMapping::startLIO(std_srvs::Empty::Request &req, std_srvs::Empty::Resp
 
 bool LaserMapping::stopLIO(std_srvs::Empty::Request &req, std_srvs::Empty::Response &res) {
     lidar_odom_ = false;
+    return true;
+}
+
+bool LaserMapping::saveTrajectory(faster_lio::SaveTrajectory::Request &req,
+                                  faster_lio::SaveTrajectory::Response &res) {
+    const std::filesystem::path file = req.file_path.empty() ? trajectory_file_ : req.file_path;
+    if (file.empty()) {
+        res.success = false;
+        res.message = "no file_path given and ~trajectory_file is not set";
+        return true;
+    }
+
+    std::error_code ec;
+    if (file.has_parent_path()) {
+        std::filesystem::create_directories(file.parent_path(), ec);
+    }
+    std::FILE *f = std::fopen(file.c_str(), "w");
+    if (f == nullptr) {
+        res.success = false;
+        res.message = "cannot open " + file.string() + " for writing";
+        return true;
+    }
+    std::fprintf(f, "# timestamp tx ty tz qx qy qz qw\n");
+    for (const auto &p : trajectory_) {
+        std::fprintf(f, "%.9f %.9f %.9f %.9f %.9f %.9f %.9f %.9f\n", p.stamp, p.pos.x(), p.pos.y(), p.pos.z(),
+                     p.rot.x(), p.rot.y(), p.rot.z(), p.rot.w());
+    }
+    res.success = std::fclose(f) == 0;
+    res.message = res.success ? "saved " + std::to_string(trajectory_.size()) + " poses to " + file.string()
+                              : "error writing " + file.string();
+    ROS_INFO_STREAM(res.message);
     return true;
 }
 
@@ -243,6 +259,8 @@ void LaserMapping::Run() {
         PROFILE_SCOPE("map incremental");
         MapIncremental();
     }
+
+    trajectory_.push_back({lidar_end_time_, state_point_.pos, Eigen::Quaterniond(state_point_.rot)});
 
     // publish
     PublishConditionNumber();
@@ -460,7 +478,6 @@ void LaserMapping::ObsModel(state_ikfom &s, esekfom::dyn_share_datastruct<double
     const float reuse_dist2 = nn_reuse_distance_ * nn_reuse_distance_;
 
     tbb::parallel_for(tbb::blocked_range<int>(0, cnt_pts), [&](tbb::blocked_range<int> r) {
-        PROFILE_SCOPE("nn search + plane fit");
         int searched = 0;
         for (auto i = r.begin(); i < r.end(); ++i) {
             // TODO: these non const should die
@@ -556,7 +573,6 @@ void LaserMapping::ObsModel(state_ikfom &s, esekfom::dyn_share_datastruct<double
         chunk_HTh(num_chunks);
 
     tbb::parallel_for(tbb::blocked_range<int>(0, num_chunks), [&](tbb::blocked_range<int> r) {
-        PROFILE_SCOPE("jacobian + HTH");
         for (int c = r.begin(); c < r.end(); ++c) {
             Eigen::Matrix<double, 12, 12> HTH = Eigen::Matrix<double, 12, 12>::Zero();
             Eigen::Matrix<double, 12, 1> HTh = Eigen::Matrix<double, 12, 1>::Zero();

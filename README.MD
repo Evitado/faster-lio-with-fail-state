@@ -18,10 +18,18 @@ starts `run_mapping_online` as `lidar_odometry`.
   simultaneous) and `common/imu_topic`.
 - Publishes (`~`): `odometry`, `trajectory`, `keypoints`, `condition_number`, and the TF `global_frame` -> `base_link_frame`.
 - Services (`~`): `start_lidar_odom` / `stop_lidar_odom`. While stopped, odometry stays at the origin.
+- `~save_trajectory` (`faster_lio/SaveTrajectory`): writes every scan's pose since the last `start_lidar_odom` to a
+  TUM file (`timestamp tx ty tz qx qy qz qw`, readable by `evo_traj tum`). The trajectory is kept after
+  `stop_lidar_odom`, so it can be saved afterwards. An empty `file_path` uses the `~trajectory_file` parameter:
+
+  ```bash
+  rosservice call /lidar_odometry/save_trajectory "file_path: '/tmp/run.tum'"
+  ```
 
 ## Profiling
 
-See [profiling/README.md](profiling/README.md) (Tracy, enabled with `-DFASTER_LIO_TRACY=ON`).
+Set `profiling_enable:=true` (or `FASTER_LIO_PROFILING=true`) to record a Tracy trace into `profiling_save_path`
+(default `/home/evitado/ssd/odometry/profiling`); see [profiling/README.md](profiling/README.md).
 
 ## Citation
 

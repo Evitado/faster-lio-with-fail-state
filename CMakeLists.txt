@@ -15,11 +15,12 @@ set(CMAKE_CXX_FLAGS_DEBUG "${CMAKE_CXX_FLAGS}")
 
 include(cmake/packages.cmake)
 
-# profiling (see profiling/README.md): Tracy client from the copy evitado_common vendors
-option(FASTER_LIO_TRACY "Instrument with the Tracy profiler (zones, cpu/memory plots)" OFF)
-option(FASTER_LIO_TRACY_MEMORY "With FASTER_LIO_TRACY: also record every operator new/delete" ON)
+# profiling (see profiling/README.md): compiled in, switched on at runtime with ~profiling_enable
+option(FASTER_LIO_TRACY "Compile in the Tracy profiler client (dormant unless ~profiling_enable)" ON)
 set(FASTER_LIO_TRACY_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../evitado/evitado_common/foreign/tracy"
-    CACHE PATH "Tracy source tree providing public/TracyClient.cpp")
+    CACHE PATH "Tracy source tree providing public/TracyClient.cpp (same commit as tracy-capture)")
+set(FASTER_LIO_TRACY_CAPTURE "${CMAKE_CURRENT_SOURCE_DIR}/profiling/tracy-tools/bin/tracy-capture"
+    CACHE FILEPATH "tracy-capture the node starts for ~profiling_enable (falls back to tracy-capture in PATH)")
 
 add_subdirectory(src)
 add_subdirectory(app)

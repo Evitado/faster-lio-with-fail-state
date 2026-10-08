@@ -1,13 +1,17 @@
 # Tracy viewer (`tracy`), headless recorder (`tracy-capture`) and `tracy-csvexport`, built from the same Tracy commit
-# that evitado_common vendors (foreign/tracy), so they speak the client's network/file protocol (72). The release
-# packaged in nixpkgs (0.11.1, protocol 69) cannot read traces from that client.
+# that evitado_common vendors (foreign/tracy) and faster-lio compiles its client from, so they speak the client's
+# network/file protocol (72). The release packaged in nixpkgs (0.11.1, protocol 69) cannot read those traces.
 #
-# Build: nix build -f profiling/tracy-tools.nix -o profiling/tracy-tools
+# Desktop tools: nix build -f profiling/tracy-tools.nix -o profiling/tracy-tools
+# captureOnly = true builds just tracy-capture (no viewer and none of its GUI libraries); package.nix uses that one.
+# passthru.tracySrc is the Tracy source the client is compiled from.
 {
   pkgs ? import (builtins.fetchTarball {
     # nixpkgs-unstable as locked in the workspace flake
     url = "https://github.com/nixos/nixpkgs/archive/9b008d60392981ad674e04016d25619281550a9d.tar.gz";
+    sha256 = "sha256-mgFxAPLWw0Kq+C8P3dRrZrOYEQXOtKuYVlo9xvPntt8=";
   }) { },
+  captureOnly ? false,
 }:
 let
   # keep in sync with submodule_version in evitado_common/package.nix
@@ -50,6 +54,9 @@ in
 (pkgs.tracy.override { withWayland = false; }).overrideAttrs (old: {
   version = "0.11.1-unstable-2025-03-10";
   src = tracySrc;
+  passthru = (old.passthru or { }) // {
+    inherit tracySrc;
+  };
 
   nativeBuildInputs = old.nativeBuildInputs ++ [ pkgs.python3 ];
   buildInputs = (builtins.filter (p: p != pkgs.capstone) old.buildInputs) ++ [ pkgs.zstd ];
@@ -96,4 +103,10 @@ in
                   "set(wayland-protocols_SOURCE_DIR ${pkgs.wayland-protocols}/share/wayland-protocols)\n")
     EOF
   '';
+}
+// pkgs.lib.optionalAttrs captureOnly {
+  pname = "tracy-capture";
+  postConfigure = "cmake -B capture/build -S capture $cmakeFlags";
+  postBuild = "ninja -C capture/build";
+  postInstall = "install -D -m 0555 capture/build/tracy-capture -t $out/bin";
 })

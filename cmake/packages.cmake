@@ -17,6 +17,11 @@ add_message_files(
         Pose6D.msg
 )
 
+add_service_files(
+        FILES
+        SaveTrajectory.srv
+)
+
 generate_messages(
         DEPENDENCIES
         geometry_msgs

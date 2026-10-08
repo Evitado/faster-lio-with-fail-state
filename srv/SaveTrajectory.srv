@@ -1,0 +1,7 @@
+# Writes the trajectory since the last start_lidar_odom as a TUM file: one line per scan,
+# "timestamp tx ty tz qx qy qz qw" (pose of the odometry frame in global_frame).
+# An empty file_path uses the node's ~trajectory_file parameter.
+string file_path
+---
+bool success
+string message

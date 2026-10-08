@@ -55,7 +55,7 @@ def main():
         per_scan = total_ms / scans if scans else float("nan")
         print(f"{z['name'][:32]:32} {int(z['counts']):8d} {float(z['mean_ns']) / 1e6:9.3f} "
               f"{float(z['max_ns']) / 1e6:9.3f} {per_scan:9.3f}")
-    print("  (zones nest and tbb zones run in parallel on worker threads, so ms/scan does not add up to cpu time)")
+    print("  (zones nest, so ms/scan does not add up to cpu time)")
 
     def stat(name, fmt):
         values = plots.get(name)

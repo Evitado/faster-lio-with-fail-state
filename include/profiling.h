@@ -1,14 +1,20 @@
 #ifndef FASTER_LIO_PROFILING_H
 #define FASTER_LIO_PROFILING_H
 
-/// Tracy instrumentation. Everything here compiles to nothing unless the package is configured with
-/// -DFASTER_LIO_TRACY=ON (see profiling/README.md), so the release build carries no profiling cost.
+/// Tracy instrumentation, switched on at runtime (see profiling/README.md).
+///
+/// The Tracy client is compiled in, but does not exist unless profiling::Start() runs (node parameter
+/// ~profiling_enable): until then every macro below is a check of one bool, no profiler thread or socket exists.
+/// Start() launches tracy-capture, which records this process into a .tracy file; Stop() at the end of main sends
+/// the rest, after which tracy-capture writes the file.
 ///
 ///   PROFILE_SCOPE("name")        zone covering the rest of the enclosing scope
 ///   PROFILE_FRAME()              marks the end of one processed scan (a "frame" in the viewer)
 ///   PROFILE_PLOT("name", value)  one sample of a numeric plot
 ///   PROFILE_THREAD_NAME("name")  names the calling thread in the viewer
 ///   profiling::PlotProcessStats() samples cpu / memory usage of this process and of the whole machine
+
+#include <string>
 
 #ifdef FASTER_LIO_TRACY
 
@@ -20,11 +26,36 @@
 #include <cstdio>
 #include <cstring>
 
-#define PROFILE_SCOPE(name) ZoneScopedN(name)
-#define PROFILE_FRAME() FrameMark
-#define PROFILE_PLOT(name, value) TracyPlot(name, value)
-#define PROFILE_PLOT_CONFIG(name, type) TracyPlotConfig(name, type, false, true, 0)
-#define PROFILE_THREAD_NAME(name) tracy::SetThreadName(name)
+namespace faster_lio::profiling {
+/// set by Start(), read by every macro
+inline bool enabled = false;
+
+/// Creates save_dir, starts tracy-capture writing save_dir/faster_lio_<date>.tracy and connects the Tracy client to
+/// it on 127.0.0.1:port. Call once, before any other profiling macro. Returns false (profiling stays off) on error.
+bool Start(const std::string &save_dir, int port);
+
+/// Flushes the remaining data to the recorder and shuts the client down. Call at the end of main, after the last
+/// instrumented code ran; profiling stays off afterwards.
+void Stop();
+}  // namespace faster_lio::profiling
+
+#define PROFILE_SCOPE(name) ZoneNamedN(___tracy_scoped_zone, name, ::faster_lio::profiling::enabled)
+#define PROFILE_FRAME()                                 \
+    do {                                                \
+        if (::faster_lio::profiling::enabled) FrameMark; \
+    } while (0)
+#define PROFILE_PLOT(name, value)                                    \
+    do {                                                             \
+        if (::faster_lio::profiling::enabled) TracyPlot(name, value); \
+    } while (0)
+#define PROFILE_PLOT_CONFIG(name, type)                                                       \
+    do {                                                                                      \
+        if (::faster_lio::profiling::enabled) TracyPlotConfig(name, type, false, true, 0); \
+    } while (0)
+#define PROFILE_THREAD_NAME(name)                                             \
+    do {                                                                      \
+        if (::faster_lio::profiling::enabled) tracy::SetThreadName(name); \
+    } while (0)
 
 namespace faster_lio::profiling {
 
@@ -35,6 +66,9 @@ namespace faster_lio::profiling {
 ///  - "process threads": number of threads
 ///  - "system mem available": MemAvailable from /proc/meminfo, i.e. what is left for other processes
 inline void PlotProcessStats() {
+    if (!enabled) {
+        return;
+    }
     using Clock = std::chrono::steady_clock;
     static bool configured = false;
     static Clock::time_point last_wall;
@@ -105,6 +139,8 @@ inline void PlotProcessStats() {
 #define PROFILE_THREAD_NAME(name)
 
 namespace faster_lio::profiling {
+inline bool Start(const std::string &, int) { return false; }
+inline void Stop() {}
 inline void PlotProcessStats() {}
 }  // namespace faster_lio::profiling
 
