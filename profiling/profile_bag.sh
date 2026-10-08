@@ -3,7 +3,7 @@
 # recorded rate and records a Tracy profile of the node, so cpu and memory usage match a live run.
 #
 #   profiling/profile_bag.sh -b <bag> [-o out.tracy] [-l lidar_topic] [-i imu_topic] [-t] [-r rate]
-#     -l / -i  topics in the bag, remapped to the ones in config/ouster64.yaml
+#     -l / -i  topics in the bag, remapped to the ones in config/ouster128.yaml
 #              (default /main/ac_filtered_points and /main/imu, i.e. no remap)
 #     -t       publish an identity base_footprint_tug -> main_sensor_lidar TF (bags without /tf_static)
 #     -r       rosbag play rate (default 1.0, real time)

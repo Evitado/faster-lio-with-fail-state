@@ -2,21 +2,20 @@ add_library(${PROJECT_NAME}
         laser_mapping.cc
         pointcloud_preprocess.cc
         options.cc
-        utils.cc
         )
 
 add_dependencies(${PROJECT_NAME} ${PROJECT_NAME}_gencpp)
 
-target_link_libraries(${PROJECT_NAME}
-        ${catkin_LIBRARIES}
-        ${PCL_LIBRARIES}
-        ${PYTHON_LIBRARIES}
-        tbb
-        glog::glog
-        yaml-cpp
+target_include_directories(${PROJECT_NAME} PUBLIC
+        ${PROJECT_SOURCE_DIR}/include
+        ${catkin_INCLUDE_DIRS}
+        ${EIGEN3_INCLUDE_DIR}
         )
 
-target_include_directories(${PROJECT_NAME} PRIVATE ${PYTHON_INCLUDE_DIRS})
+target_link_libraries(${PROJECT_NAME}
+        ${catkin_LIBRARIES}
+        TBB::tbb
+        )
 
 if (FASTER_LIO_TRACY)
     if (NOT EXISTS "${FASTER_LIO_TRACY_DIR}/public/TracyClient.cpp")

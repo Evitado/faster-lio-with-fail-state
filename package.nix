@@ -4,22 +4,16 @@
   buildRosPackage,
   catkin,
   eigen,
-  eigen-conversions,
   geometry-msgs,
-  glog,
   message-generation,
   message-runtime,
   nav-msgs,
-  pcl-ros,
-  rosbag,
   roscpp,
-  rospy,
-  rostest,
   sensor-msgs,
   std-msgs,
+  std-srvs,
   tbb_2022_0,
   tf,
-  yaml-cpp,
 }:
 buildRosPackage rec {
   pname = "ros-noetic-faster-lio";
@@ -33,24 +27,16 @@ buildRosPackage rec {
     message-generation
     tbb_2022_0
   ];
-  checkInputs = [
-    rosbag
-    rostest
-  ];
   propagatedBuildInputs = [
     eigen
-    eigen-conversions
     geometry-msgs
-    glog
     message-runtime
     nav-msgs
-    pcl-ros
     roscpp
-    rospy
     sensor-msgs
     std-msgs
+    std-srvs
     tf
-    yaml-cpp
   ];
   nativeBuildInputs = [ catkin ];
 

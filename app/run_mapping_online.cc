@@ -1,14 +1,8 @@
-//
-// Created by xiang on 2021/10/8.
-//
-#include <gflags/gflags.h>
-#include <unistd.h>
+#include <ros/ros.h>
 #include <csignal>
 
 #include "laser_mapping.h"
 #include "profiling.h"
-#include "ros/init.h"
-#include "ros/node_handle.h"
 
 #ifdef FASTER_LIO_TRACY_MEMORY
 #include <atomic>
@@ -16,8 +10,8 @@
 #include <cstdlib>
 #include <new>
 
-// Route operator new/delete through Tracy's memory view (allocations, live memory over time). Eigen-aligned buffers
-// (e.g. pcl point storage) go through malloc and are not seen here; the "process rss" plot covers them.
+// Route operator new/delete through Tracy's memory view (allocations, live memory over time). Buffers allocated with
+// malloc (e.g. Eigen's dynamic matrices) are not seen here; the "process rss" plot covers them.
 // Reporting starts in main(): allocations made while Tracy initializes during static init would break its startup
 // calibration. A small header remembers whether a block was reported, so blocks allocated before main are never
 // freed into Tracy (the viewer rejects frees of unknown pointers).
@@ -63,26 +57,18 @@ void operator delete(void *ptr, const std::nothrow_t &) noexcept { TrackedFree(p
 void operator delete[](void *ptr, const std::nothrow_t &) noexcept { TrackedFree(ptr); }
 #endif
 
-/// run the lidar mapping in online mode
-
-// DEFINE_string(traj_log_file, "./Log/traj.txt", "path to traj log file");
 void SigHandle(int sig) {
     faster_lio::options::FLAG_EXIT = true;
     ROS_WARN("catch sig %d", sig);
 }
 
 int main(int argc, char **argv) {
-    FLAGS_stderrthreshold = google::INFO;
-    FLAGS_colorlogtostderr = true;
-    google::InitGoogleLogging(argv[0]);
-    google::ParseCommandLineFlags(&argc, &argv, true);
-
 #ifdef FASTER_LIO_TRACY_MEMORY
     g_report_allocations = true;
 #endif
     PROFILE_THREAD_NAME("faster_lio main");
 #ifdef FASTER_LIO_TRACY
-    LOG(WARNING) << "PROFILING BUILD: Tracy collects data in memory until tracy-capture connects (profiling/README.md)";
+    ROS_WARN_STREAM("PROFILING BUILD: Tracy collects data in memory until tracy-capture connects (profiling/README.md)");
 #endif
 
     ros::init(argc, argv, "faster_lio");
@@ -95,9 +81,6 @@ int main(int argc, char **argv) {
     signal(SIGINT, SigHandle);
     ros::Rate rate(100);
 
-    // ros::spin();
-
-    // online, almost same with offline, just receive the messages from ros
     while (ros::ok()) {
         if (faster_lio::options::FLAG_EXIT) {
             break;
@@ -112,13 +95,6 @@ int main(int argc, char **argv) {
             rate.sleep();
         }
     }
-
-    LOG(INFO) << "finishing mapping";
-    laser_mapping->Finish();
-
-    // faster_lio::Timer::PrintAll();
-    // LOG(INFO) << "save trajectory to: " << FLAGS_traj_log_file;
-    // laser_mapping->Savetrajectory(FLAGS_traj_log_file);
 
     return 0;
 }

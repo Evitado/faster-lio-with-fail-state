@@ -86,11 +86,6 @@ class VoxelTable {
         entries_.pop_back();
     }
 
-    template <typename F>
-    void ForEachNode(F &&f) const {
-        for (const auto &e : entries_) f(e.node);
-    }
-
    private:
     struct Slot {
         uint64_t key = 0;
