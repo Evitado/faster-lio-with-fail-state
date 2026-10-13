@@ -13,6 +13,12 @@
 
 namespace faster_lio {
 
+namespace {
+constexpr double INIT_TIME = 0.1;          // seconds after the first scan before points are added selectively
+constexpr double LASER_POINT_COV = 0.001;  // measurement covariance of a point-to-plane residual
+constexpr int NUM_MATCH_POINTS = 5;        // nearest map points searched per scan point
+}  // namespace
+
 bool LaserMapping::InitROS(const ros::NodeHandle &nh, const ros::NodeHandle &pnh) {
     nh_ = nh;
     pnh_ = pnh;
@@ -25,7 +31,7 @@ bool LaserMapping::InitROS(const ros::NodeHandle &nh, const ros::NodeHandle &pnh
     kf_.init_dyn_share(
         get_f, df_dx, df_dw,
         [this](state_ikfom &s, esekfom::dyn_share_datastruct<double> &ekfom_data) { ObsModel(s, ekfom_data); },
-        options::NUM_MAX_ITERATIONS, epsi.data());
+        num_max_iterations_, epsi.data());
 
     return true;
 }
@@ -45,8 +51,8 @@ bool LaserMapping::LoadParams() {
     nh_.param<bool>("publish/dense_publish_en", dense_pub_en_, false);
     nh_.param<bool>("publish/scan_bodyframe_pub_en", scan_body_pub_en_, true);
 
-    nh_.param<int>("max_iteration", options::NUM_MAX_ITERATIONS, 4);
-    nh_.param<float>("esti_plane_threshold", options::ESTI_PLANE_THRESHOLD, 0.1);
+    nh_.param<int>("max_iteration", num_max_iterations_, 4);
+    nh_.param<float>("esti_plane_threshold", esti_plane_threshold_, 0.1);
     nh_.param<float>("filter_size_surf", filter_size_surf_, 0.5f);
     nh_.param<double>("filter_size_map", filter_size_map_min_, 0.0);
     nh_.param<double>("mapping/gyr_cov", gyr_cov, 0.1);
@@ -232,7 +238,7 @@ void LaserMapping::ProcessScan() {
         flg_first_scan_ = false;
         return;
     }
-    flg_EKF_inited_ = (measures_.lidar_bag_time_ - first_lidar_time_) >= options::INIT_TIME;
+    flg_EKF_inited_ = (measures_.lidar_bag_time_ - first_lidar_time_) >= INIT_TIME;
 
     /// downsample
     {
@@ -262,7 +268,7 @@ void LaserMapping::ProcessScan() {
         // iterated state estimation
         double solve_H_time = 0;
         // update the observation model, will call nn and point-to-plane residual computation
-        kf_.update_iterated_dyn_share_modified(options::LASER_POINT_COV, solve_H_time);
+        kf_.update_iterated_dyn_share_modified(LASER_POINT_COV, solve_H_time);
         // save the state
         state_point_ = kf_.get_x();
     }
@@ -420,8 +426,8 @@ void LaserMapping::MapIncremental() {
             // TODO delete this and tbbfy the loop based on num points
             bool need_add = true;
             float dist = common::calc_dist(point_world.pos(), center);
-            if (points_near.size() >= options::NUM_MATCH_POINTS) {
-                for (int readd_i = 0; readd_i < options::NUM_MATCH_POINTS; readd_i++) {
+            if (points_near.size() >= NUM_MATCH_POINTS) {
+                for (int readd_i = 0; readd_i < NUM_MATCH_POINTS; readd_i++) {
                     if (common::calc_dist(points_near[readd_i].pos(), center) < dist + 1e-6) {
                         need_add = false;
                         break;
@@ -507,11 +513,11 @@ void LaserMapping::ObsModel(state_ikfom &s, esekfom::dyn_share_datastruct<double
                     // search straight into the per-point buffer, it keeps its capacity across scans
                     MapPointVector &points_near = nearest_points_[i];
                     ivox_->GetClosestPoint(MapPointType(point_world.x, point_world.y, point_world.z),
-                                           points_near, options::NUM_MATCH_POINTS);
-                    point_selected_surf_[i] = points_near.size() >= options::MIN_NUM_MATCH_POINTS;
+                                           points_near, NUM_MATCH_POINTS);
+                    point_selected_surf_[i] = points_near.size() >= common::MIN_NUM_MATCH_POINTS;
                     if (point_selected_surf_[i]) {
                         point_selected_surf_[i] =
-                            common::esti_plane(plane_coef_[i], points_near, options::ESTI_PLANE_THRESHOLD);
+                            common::esti_plane(plane_coef_[i], points_near, esti_plane_threshold_);
                     }
                     plane_ok_[i] = point_selected_surf_[i];
                     search_pos_[i] = p_world;

@@ -14,7 +14,6 @@
 #include "faster_lio/SaveTrajectory.h"
 #include "imu_processing.hpp"
 #include "ivox3d/ivox3d.h"
-#include "options.h"
 #include "pointcloud_preprocess.h"
 
 namespace faster_lio {
@@ -95,6 +94,8 @@ class LaserMapping {
     common::VV4F corr_pts_;                           // inlier pts
     common::VV4F corr_norm_;                          // inlier plane norms
     float filter_size_surf_ = 0.5f;                   // voxel size the current scan is downsampled with
+    int num_max_iterations_ = 4;                      // max iterations of the IEKF update
+    float esti_plane_threshold_ = 0.1f;               // max point-to-plane distance of a plane fit
     std::vector<float> residuals_;                    // point-to-plane residuals
     std::vector<uint8_t> point_selected_surf_;        // selected points (not vector<bool>: written from TBB threads)
     common::VV4F plane_coef_;                         // plane coeffs

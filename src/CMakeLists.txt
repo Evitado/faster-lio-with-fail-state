@@ -1,7 +1,6 @@
 add_library(${PROJECT_NAME}
         laser_mapping.cc
         pointcloud_preprocess.cc
-        options.cc
         )
 
 add_dependencies(${PROJECT_NAME} ${PROJECT_NAME}_gencpp)

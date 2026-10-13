@@ -9,13 +9,13 @@
 #include <deque>
 
 #include "faster_lio/Pose6D.h"
-#include "options.h"
 #include "point_cloud.h"
 #include "so3_math.h"
 
 namespace faster_lio::common {
 
 constexpr double G_m_s2 = 9.81;  // Gravity const in GuangDong/China
+constexpr int MIN_NUM_MATCH_POINTS = 3;  // fewest neighbours a plane is fitted to
 
 template <typename S>
 inline Eigen::Matrix<S, 3, 1> VecFromArray(const std::vector<double> &v) {
@@ -102,7 +102,7 @@ inline float calc_dist(const Eigen::Vector3f &p1, const Eigen::Vector3f &p2) { r
  */
 template <typename T, typename PointVec>
 inline bool esti_plane(Eigen::Matrix<T, 4, 1> &pca_result, const PointVec &point, const T &threshold = 0.1f) {
-    if (point.size() < options::MIN_NUM_MATCH_POINTS) {
+    if (point.size() < MIN_NUM_MATCH_POINTS) {
         return false;
     }
 
