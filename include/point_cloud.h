@@ -68,6 +68,9 @@ inline void VoxelDownsample(const PointCloudType &in, float leaf, PointCloudType
         min_p = min_p.min(p.pos().array());
         max_p = max_p.max(p.pos().array());
     }
+    if ((min_p > max_p).any()) {  // no finite point
+        return;
+    }
     const Eigen::Array3i min_b = (min_p * inv_leaf).floor().cast<int>();
     const Eigen::Array3i max_b = (max_p * inv_leaf).floor().cast<int>();
     const Eigen::Array3i div = max_b - min_b + 1;

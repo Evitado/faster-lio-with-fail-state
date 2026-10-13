@@ -21,6 +21,16 @@ set(FASTER_LIO_TRACY_CAPTURE "${CMAKE_CURRENT_SOURCE_DIR}/profiling/tracy-tools/
 add_subdirectory(src)
 add_subdirectory(app)
 
+if (CATKIN_ENABLE_TESTING)
+    catkin_add_gtest(${PROJECT_NAME}-test-point-cloud test/point_cloud_test.cc)
+    if (TARGET ${PROJECT_NAME}-test-point-cloud)
+        # header-only code under test: no need for the library (TBB, Tracy)
+        target_include_directories(${PROJECT_NAME}-test-point-cloud PRIVATE
+                ${PROJECT_SOURCE_DIR}/include ${catkin_INCLUDE_DIRS} ${EIGEN3_INCLUDE_DIR})
+        target_link_libraries(${PROJECT_NAME}-test-point-cloud ${catkin_LIBRARIES})
+    endif ()
+endif ()
+
 foreach(dir config launch)
   install(DIRECTORY ${dir}/
           DESTINATION ${CATKIN_PACKAGE_SHARE_DESTINATION}/${dir})
