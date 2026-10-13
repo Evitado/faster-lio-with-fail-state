@@ -259,7 +259,6 @@ void LaserMapping::ProcessScan() {
     search_pos_.resize(cur_pts);
     plane_ok_.resize(cur_pts, 0);
     searched_this_scan_ = false;
-    nn_searches_ = 0;
 
     // ICP and iterated Kalman filter update
     {
@@ -299,7 +298,6 @@ void LaserMapping::ProfileScan() {
     PROFILE_PLOT("scan points (downsampled)", static_cast<int64_t>(scan_down_body_->size()));
     PROFILE_PLOT("effective features", static_cast<int64_t>(effect_feat_num_));
     PROFILE_PLOT("IEKF iterations", static_cast<int64_t>(obs_model_calls_));
-    PROFILE_PLOT("nn searches", static_cast<int64_t>(nn_searches_.load()));
     PROFILE_PLOT("map voxels", static_cast<int64_t>(ivox_->NumValidGrids()));
     PROFILE_PLOT("lidar buffer", static_cast<int64_t>(lidar_buffer_.size()));
     profiling::PlotProcessStats();
@@ -307,7 +305,6 @@ void LaserMapping::ProfileScan() {
 }
 
 void LaserMapping::StandardPCLCallBack(const sensor_msgs::PointCloud2::ConstPtr &msg) {
-    PROFILE_SCOPE("lidar callback");
     if (msg->header.stamp.toSec() < last_timestamp_lidar_) {
         ROS_ERROR_STREAM("lidar loop back, clear buffer");
         lidar_buffer_.clear();
@@ -322,7 +319,6 @@ void LaserMapping::StandardPCLCallBack(const sensor_msgs::PointCloud2::ConstPtr 
 }
 
 void LaserMapping::IMUCallBack(const sensor_msgs::Imu::ConstPtr &msg_in) {
-    PROFILE_SCOPE("imu callback");
     const double timestamp = msg_in->header.stamp.toSec();
 
     if (timestamp < last_timestamp_imu_) {
@@ -335,7 +331,6 @@ void LaserMapping::IMUCallBack(const sensor_msgs::Imu::ConstPtr &msg_in) {
 }
 
 bool LaserMapping::SyncPackages() {
-    PROFILE_SCOPE("sync packages");
     if (lidar_buffer_.empty() || imu_buffer_.empty()) {
         return false;
     }
@@ -444,15 +439,11 @@ void LaserMapping::MapIncremental() {
         }
     });
 
-    {
-        PROFILE_SCOPE("ivox add points");
-        ivox_->AddPoints(points_to_add);
-        ivox_->AddPoints(point_no_need_downsample);
-    }
+    ivox_->AddPoints(points_to_add);
+    ivox_->AddPoints(point_no_need_downsample);
 }
 
 void LaserMapping::PublishConditionNumber() {
-    PROFILE_SCOPE("publish condition number");
     if (!cond_jtj_valid_) {
         return;
     }
@@ -494,7 +485,6 @@ void LaserMapping::ObsModel(state_ikfom &s, esekfom::dyn_share_datastruct<double
     const float reuse_dist2 = nn_reuse_distance_ * nn_reuse_distance_;
 
     tbb::parallel_for(tbb::blocked_range<int>(0, cnt_pts), [&](tbb::blocked_range<int> r) {
-        int searched = 0;
         for (auto i = r.begin(); i < r.end(); ++i) {
             // TODO: these non const should die
             const PointType &point_body = (*scan_down_body_)[i];
@@ -523,7 +513,6 @@ void LaserMapping::ObsModel(state_ikfom &s, esekfom::dyn_share_datastruct<double
                     }
                     plane_ok_[i] = point_selected_surf_[i];
                     search_pos_[i] = p_world;
-                    ++searched;
                 }
             }
 
@@ -537,7 +526,6 @@ void LaserMapping::ObsModel(state_ikfom &s, esekfom::dyn_share_datastruct<double
                 }
             }
         }
-        nn_searches_ += searched;
     });
     if (ekfom_data.converge) {
         searched_this_scan_ = true;
@@ -646,7 +634,6 @@ void LaserMapping::ObsModel(state_ikfom &s, esekfom::dyn_share_datastruct<double
 /////////////////////////////////////  publishing ////////////////////////////////////////////////////////////
 
 void LaserMapping::PublishPath(const ros::Publisher pub_path) {
-    PROFILE_SCOPE("publish path");
     SetPosestamp(msg_body_pose_);
     msg_body_pose_.header.stamp = lidar_end_stamp_;
     msg_body_pose_.header.frame_id = global_frame_;
@@ -660,7 +647,6 @@ void LaserMapping::PublishPath(const ros::Publisher pub_path) {
 }
 
 void LaserMapping::PublishKeypoints(const ros::Publisher &pubLaserCloudFull) {
-    PROFILE_SCOPE("publish keypoints");
     // ROS_INFO("Internally the keypoints size is %zu", feats_down_body->size());
     if (pubLaserCloudFull.getNumSubscribers() == 0) {
         return;

@@ -50,7 +50,9 @@ until rosservice list 2> /dev/null | grep -q "/lidar_odometry/start_lidar_odom";
 rosservice call /lidar_odometry/start_lidar_odom > /dev/null
 
 echo "playing $bag (rate $rate)"
-rosbag play -q -r "$rate" "$bag" "$lidar_topic:=/main/ac_filtered_points" "$imu_topic:=/main/imu"
+# -d: wait after advertising so the node is subscribed before the first message (otherwise a random number of
+# leading messages is lost and the IMU initialisation, hence the whole trajectory, differs between runs)
+rosbag play -q -d 1 -r "$rate" "$bag" "$lidar_topic:=/main/ac_filtered_points" "$imu_topic:=/main/imu"
 sleep 2
 kill -INT "$launch_pid"
 wait "$launch_pid" || true

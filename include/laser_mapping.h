@@ -8,7 +8,6 @@
 #include <std_srvs/Empty.h>
 #include <tbb/global_control.h>
 #include <tf/transform_listener.h>
-#include <atomic>
 
 #include "common_lib.h"
 #include "faster_lio/SaveTrajectory.h"
@@ -103,7 +102,6 @@ class LaserMapping {
     std::vector<uint8_t> plane_ok_;                   // whether that search gave a valid plane
     bool searched_this_scan_ = false;                 // an nn search already ran for the current scan
     float nn_reuse_distance_ = 0.01f;                 // re-search a point only if it moved more than this [m]
-    std::atomic<int> nn_searches_{0};                 // points searched in the current scan (profiling)
 
     /// ros pub and sub stuffs
     ros::NodeHandle nh_;

@@ -50,12 +50,13 @@ python3 profiling/summarize.py faster_lio_<date>.tracy           # text summary:
 What the trace shows:
 
 - **Frames:** one per processed scan, so frame times are scan latencies.
-- **Zones:** the pipeline stages of each scan (preprocess, undistort, downsample, IEKF update, ObsModel, map update,
-  publishers) and the `lidar callback` / `imu callback` that feed them. Scans are processed from the callbacks
-  as soon as the IMU covers them, so the gaps between zones on the main thread are idle time.
+- **Zones:** only the stages that cost something: preprocess (in the lidar callback), imu process (propagation and
+  undistortion), downsample, IEKF update with its ObsModel calls, map incremental and publish odometry + tf. Scans are
+  processed from the callbacks as soon as the IMU covers them, so the gaps between zones on the main thread are idle
+  time.
 - **Plots:** `process cpu [cores]` (1.0 = one busy core), `process rss`, `process threads`, `system mem available`
-  (what the rest of the stack has left), and per scan: points, effective features, IEKF iterations, nn searches, map
-  voxels, lidar buffer length.
+  (what the rest of the stack has left), and per scan: points, effective features, IEKF iterations, map voxels,
+  lidar buffer length.
 
 The recording is the faster-lio process; `system mem available` and the idle time on the main thread show how
 it fits into the rest of the stack. Context switches and sampling are compiled out (they need root or kernel
