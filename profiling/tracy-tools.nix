@@ -1,5 +1,5 @@
 # Tracy viewer (`tracy`), headless recorder (`tracy-capture`) and `tracy-csvexport`, built from the same Tracy commit
-# that evitado_common vendors (foreign/tracy) and faster-lio compiles its client from, so they speak the client's
+# that faster-lio vendors as the foreign/tracy submodule and compiles its client from, so they speak the client's
 # network/file protocol (72). The release packaged in nixpkgs (0.11.1, protocol 69) cannot read those traces.
 #
 # Desktop tools: nix build -f profiling/tracy-tools.nix -o profiling/tracy-tools
@@ -14,7 +14,7 @@
   captureOnly ? false,
 }:
 let
-  # keep in sync with submodule_version in evitado_common/package.nix
+  # keep in sync with the foreign/tracy submodule commit
   tracySrc = pkgs.fetchFromGitHub {
     owner = "wolfpld";
     repo = "tracy";
