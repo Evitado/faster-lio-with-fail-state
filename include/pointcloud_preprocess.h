@@ -2,7 +2,8 @@
 #define FASTER_LIO_POINTCLOUD_PROCESSING_H
 
 #include <sensor_msgs/PointCloud2.h>
-
+#include <algorithm>
+#include "point_cloud.h"
 #include "common_lib.h"
 
 namespace faster_lio {
@@ -13,19 +14,19 @@ namespace faster_lio {
  */
 class PointCloudPreprocess {
    public:
-    void Process(const sensor_msgs::PointCloud2::ConstPtr &msg, CloudPtr &pcl_out);
+    /// blind: points closer than this [m] are dropped; point_filter_num: keep every n-th point (values < 1 keep all)
+    PointCloudPreprocess(double blind, int point_filter_num)
+        : point_filter_num_(std::max(point_filter_num, 1)), blind_(blind) {}
 
-    // accessors
-    double &Blind() { return blind_; }
-    int &PointFilterNum() { return point_filter_num_; }
+    void Process(const sensor_msgs::PointCloud2::ConstPtr &msg, CloudPtr &pcl_out);
 
    private:
     void Ouster128Handler(const sensor_msgs::PointCloud2::ConstPtr &msg);
 
     PointCloudType cloud_out_;
 
-    int point_filter_num_ = 1;
-    double blind_ = 0.01;
+    const int point_filter_num_;
+    const double blind_;
 };
 }  // namespace faster_lio
 

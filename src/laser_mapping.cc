@@ -59,8 +59,8 @@ bool LaserMapping::LoadParams() {
     nh_.param<double>("mapping/acc_cov", acc_cov, 0.1);
     nh_.param<double>("mapping/b_gyr_cov", b_gyr_cov, 0.0001);
     nh_.param<double>("mapping/b_acc_cov", b_acc_cov, 0.0001);
-    nh_.param<double>("preprocess/blind", preprocess_->Blind(), 0.01);
-    nh_.param<int>("point_filter_num", preprocess_->PointFilterNum(), 2);
+    preprocess_ = std::make_shared<PointCloudPreprocess>(nh_.param<double>("preprocess/blind", 0.01),
+                                                         nh_.param<int>("point_filter_num", 2));
     int tbb_num_threads = 0;
     nh_.param<int>("tbb_num_threads", tbb_num_threads, 0);
     if (tbb_num_threads > 0) {
@@ -144,7 +144,6 @@ void LaserMapping::SubAndPubToROS() {
 }
 
 LaserMapping::LaserMapping() {
-    preprocess_.reset(new PointCloudPreprocess());
     p_imu_.reset(new ImuProcess());
 }
 
