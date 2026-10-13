@@ -164,8 +164,7 @@ void IVox<dim, PointType>::AddPoints(const PointVector& points_to_add) {
 
         const int voxel = grids_.Find(key);
         if (voxel < 0) {
-            PointType center;
-            center.pos() = key.template cast<float>() * options_.resolution_;
+            const PointType center(Eigen::Vector3f(key.template cast<float>() * options_.resolution_));
 
             const int added = grids_.Insert(key, NodeType(center, options_.resolution_));
             grids_.Node(added).InsertPoint(pt);

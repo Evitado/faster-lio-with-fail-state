@@ -500,7 +500,7 @@ void LaserMapping::ObsModel(state_ikfom &s, esekfom::dyn_share_datastruct<double
             /* transform to world frame */
             common::V3F p_body = point_body.pos();
             PointType point_world = PointType();
-            point_world.pos() = R_wl * p_body + t_wl;
+            point_world.set_pos(R_wl * p_body + t_wl);
             point_world.intensity = point_body.intensity;
             (*scan_down_world_)[i] = point_world;
 

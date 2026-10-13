@@ -16,23 +16,30 @@ namespace faster_lio {
 
 /// scan point: position, intensity and its time since the scan start
 struct PointType {
-    float x = 0, y = 0, z = 0;
+    float x = 0;
+    float y = 0;
+    float z = 0;
     float intensity = 0;
     float time = 0;  // [ms]
 
-    Eigen::Map<Eigen::Vector3f> pos() { return Eigen::Map<Eigen::Vector3f>(&x); }
-    Eigen::Map<const Eigen::Vector3f> pos() const { return Eigen::Map<const Eigen::Vector3f>(&x); }
+    Eigen::Vector3f pos() const { return {x, y, z}; }
+    void set_pos(const Eigen::Vector3f &p) {
+        x = p.x();
+        y = p.y();
+        z = p.z();
+    }
 };
 
 /// local map point, position only
 struct MapPointType {
-    float x = 0, y = 0, z = 0;
+    float x = 0;
+    float y = 0;
+    float z = 0;
 
-    MapPointType() = default;
-    MapPointType(float px, float py, float pz) : x(px), y(py), z(pz) {}
+    explicit MapPointType(float px, float py, float pz) : x(px), y(py), z(pz) {}
+    explicit MapPointType(const Eigen::Vector3f &p) : x(p.x()), y(p.y()), z(p.z()) {}
 
-    Eigen::Map<Eigen::Vector3f> pos() { return Eigen::Map<Eigen::Vector3f>(&x); }
-    Eigen::Map<const Eigen::Vector3f> pos() const { return Eigen::Map<const Eigen::Vector3f>(&x); }
+    Eigen::Vector3f pos() const { return {x, y, z}; }
 };
 
 using PointCloudType = std::vector<PointType>;
@@ -46,6 +53,10 @@ using MapPointVector = std::vector<MapPointType>;
 inline void VoxelDownsample(const PointCloudType &in, float leaf, PointCloudType &out) {
     out.clear();
     if (in.empty()) {
+        return;
+    }
+    if (!(leaf > 0.0f)) {  // no grid to snap to (also catches NaN): keep the cloud as it is
+        out = in;
         return;
     }
     const float inv_leaf = 1.0f / leaf;
@@ -110,8 +121,10 @@ inline void ToRosMsg(const PointCloudType &cloud, sensor_msgs::PointCloud2 &msg)
     msg.data.resize(msg.row_step);
     uint8_t *dst = msg.data.data();
     for (const auto &p : cloud) {
-        std::memcpy(dst, &p.x, 16);  // x, y, z, intensity are the first four floats of PointType
-        dst += 16;
+        for (const float value : {p.x, p.y, p.z, p.intensity}) {
+            std::memcpy(dst, &value, sizeof(float));
+            dst += sizeof(float);
+        }
     }
 }
 
