@@ -160,7 +160,13 @@ void IVox<dim, PointType>::GenerateNearbyGrids() {
 template <int dim, typename PointType>
 void IVox<dim, PointType>::AddPoints(const PointVector& points_to_add) {
     std::for_each(points_to_add.begin(), points_to_add.end(), [this](const auto& pt) {
-        auto key = Pos2Grid(ToEigen<float, dim>(pt));
+        const PtType p = ToEigen<float, dim>(pt);
+        // a NaN point has no voxel: Pos2Grid casts NaN to int (INT_MIN), which packs to the key of voxel (0, 0, 0),
+        // and its NaN distance passes every comparison in GetClosestPoint, so it would enter the nearest points
+        if (!p.allFinite()) {
+            return;
+        }
+        auto key = Pos2Grid(p);
 
         const int voxel = grids_.Find(key);
         if (voxel < 0) {
