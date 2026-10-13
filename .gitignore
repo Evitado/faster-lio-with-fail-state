@@ -32,4 +32,8 @@
 *.app
 
 build/
-*.pcd
+*.pcd# built Tracy capture tools (nix build -f profiling/tracy-tools.nix -o profiling/tracy-tools)
+profiling/tracy-tools
+# profiling traces (profiling/profile_bag.sh)
+Log/*.tracy
+Log/*.log

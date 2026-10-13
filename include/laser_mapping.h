@@ -91,6 +91,9 @@ class LaserMapping {
 
     void PrintState(const state_ikfom &s);
 
+    /// per scan plots and frame mark of the profiler
+    void ProfileScan();
+
    private:
     /// modules
     IVoxType::Options ivox_options_;
@@ -167,6 +170,8 @@ class LaserMapping {
     int scan_num_ = 0;
     bool timediff_set_flg_ = false;
     int effect_feat_num_ = 0, frame_num_ = 0;
+    int obs_model_calls_ = 0;  // IEKF iterations of the current scan (profiling)
+    int nn_searches_ = 0;      // nearest neighbour searches of the current scan (profiling)
 
     ///////////////////////// EKF inputs and output ///////////////////////////////////////////////////////
     common::MeasureGroup measures_;                    // sync IMU and lidar scan

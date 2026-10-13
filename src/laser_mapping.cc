@@ -10,6 +10,7 @@
 #include "laser_mapping.h"
 #include "ros/node_handle.h"
 #include "tf/transform_listener.h"
+#include "profiling.h"
 #include "utils.h"
 
 #include <std_msgs/Float64.h>
@@ -306,6 +307,9 @@ void LaserMapping::Run() {
     if (!SyncPackages()) {
         return;
     }
+    PROFILE_SCOPE("LaserMapping::ProcessScan");
+    obs_model_calls_ = 0;
+    nn_searches_ = 0;
 
     /// IMU process, kf prediction, undistortion
     p_imu_->Process(measures_, kf_, scan_undistort_);
@@ -328,6 +332,7 @@ void LaserMapping::Run() {
         path_.poses.clear();
         PublishPath(pub_path_);
         flg_first_scan_ = true;
+        ProfileScan();
         return;
     }
 
@@ -343,6 +348,7 @@ void LaserMapping::Run() {
     /// downsample
     Timer::Evaluate(
         [&, this]() {
+            PROFILE_SCOPE("downsample");
             voxel_scan_.setInputCloud(scan_undistort_);
             voxel_scan_.filter(*scan_down_body_);
         },
@@ -363,6 +369,7 @@ void LaserMapping::Run() {
     // ICP and iterated Kalman filter update
     Timer::Evaluate(
         [&, this]() {
+            PROFILE_SCOPE("IEKF update");
             // iterated state estimation
             double solve_H_time = 0;
             // update the observation model, will call nn and point-to-plane residual computation
@@ -375,7 +382,12 @@ void LaserMapping::Run() {
         "IEKF Solve and Update");
 
     // update local map
-    Timer::Evaluate([&, this]() { MapIncremental(); }, "    Incremental Mapping");
+    Timer::Evaluate(
+        [&, this]() {
+            PROFILE_SCOPE("map incremental");
+            MapIncremental();
+        },
+        "    Incremental Mapping");
 
     // publish or save map pcd
     PublishKeypoints(keypoints_pub_);
@@ -403,9 +415,23 @@ void LaserMapping::Run() {
     }
     // Debug variables
     frame_num_++;
+    ProfileScan();
+}
+
+void LaserMapping::ProfileScan() {
+    PROFILE_PLOT("scan points (preprocessed)", static_cast<int64_t>(measures_.lidar_ ? measures_.lidar_->size() : 0));
+    PROFILE_PLOT("scan points (downsampled)", static_cast<int64_t>(scan_down_body_->size()));
+    PROFILE_PLOT("effective features", static_cast<int64_t>(effect_feat_num_));
+    PROFILE_PLOT("IEKF iterations", static_cast<int64_t>(obs_model_calls_));
+    PROFILE_PLOT("nn searches", static_cast<int64_t>(nn_searches_));
+    PROFILE_PLOT("map voxels", static_cast<int64_t>(ivox_->NumValidGrids()));
+    PROFILE_PLOT("lidar buffer", static_cast<int64_t>(lidar_buffer_.size()));
+    profiling::PlotProcessStats();
+    PROFILE_FRAME();
 }
 
 void LaserMapping::StandardPCLCallBack(const sensor_msgs::PointCloud2::ConstPtr &msg) {
+    PROFILE_SCOPE("lidar callback");
     mtx_buffer_.lock();
     Timer::Evaluate(
         [&, this]() {
@@ -428,6 +454,7 @@ void LaserMapping::StandardPCLCallBack(const sensor_msgs::PointCloud2::ConstPtr 
 }
 
 void LaserMapping::IMUCallBack(const sensor_msgs::Imu::ConstPtr &msg_in) {
+    PROFILE_SCOPE("imu callback");
     publish_count_++;
     sensor_msgs::Imu::Ptr msg(new sensor_msgs::Imu(*msg_in));
 
@@ -449,6 +476,7 @@ void LaserMapping::IMUCallBack(const sensor_msgs::Imu::ConstPtr &msg_in) {
 }
 
 bool LaserMapping::SyncPackages() {
+    PROFILE_SCOPE("sync packages");
     if (lidar_buffer_.empty() || imu_buffer_.empty()) {
         return false;
     }
@@ -554,6 +582,7 @@ void LaserMapping::MapIncremental() {
 
     Timer::Evaluate(
         [&, this]() {
+            PROFILE_SCOPE("ivox add points");
             ivox_->AddPoints(points_to_add);
             ivox_->AddPoints(point_no_need_downsample);
         },
@@ -562,6 +591,7 @@ void LaserMapping::MapIncremental() {
 
 void LaserMapping::computeConditionNumber(const Eigen::Matrix<double, Eigen::Dynamic, Eigen::Dynamic>& h_x)
 {
+    PROFILE_SCOPE("publish condition number");
     Eigen::Matrix<double, 6, 6> A = Eigen::Matrix<double, 6, 6>::Zero();
     for (int i = 0; i < h_x.rows(); ++i)
     {
@@ -601,7 +631,12 @@ void LaserMapping::computeConditionNumber(const Eigen::Matrix<double, Eigen::Dyn
  * @param ekfom_data H matrix
  */
 void LaserMapping::ObsModel(state_ikfom &s, esekfom::dyn_share_datastruct<double> &ekfom_data) {
+    PROFILE_SCOPE("ObsModel");
+    obs_model_calls_++;
     int cnt_pts = scan_down_body_->size();
+    if (ekfom_data.converge) {
+        nn_searches_ += cnt_pts;  // every point is searched again
+    }
 
     std::vector<size_t> index(cnt_pts);
     std::iota(index.begin(), index.end(), 0);
@@ -725,6 +760,7 @@ void LaserMapping::ObsModel(state_ikfom &s, esekfom::dyn_share_datastruct<double
 /////////////////////////////////////  debug save / show /////////////////////////////////////////////////////
 
 void LaserMapping::PublishPath(const ros::Publisher pub_path) {
+    PROFILE_SCOPE("publish path");
     SetPosestamp(msg_body_pose_);
     msg_body_pose_.header.stamp = lidar_end_stamp_;
     msg_body_pose_.header.frame_id = global_frame_;
@@ -737,6 +773,7 @@ void LaserMapping::PublishPath(const ros::Publisher pub_path) {
 }
 
 void LaserMapping::PublishKeypoints(const ros::Publisher &pubLaserCloudFull) {
+    PROFILE_SCOPE("publish keypoints");
     // ROS_INFO("Internally the keypoints size is %zu", feats_down_body->size());
     sensor_msgs::PointCloud2 laserCloudmsg;
     pcl::toROSMsg(*scan_down_world_, laserCloudmsg);
@@ -745,6 +782,7 @@ void LaserMapping::PublishKeypoints(const ros::Publisher &pubLaserCloudFull) {
     pubLaserCloudFull.publish(laserCloudmsg);
 }
 void LaserMapping::PublishOdometry(const ros::Publisher &pub_odom_aft_mapped) {
+    PROFILE_SCOPE("publish odometry + tf");
     // TODO: change this
 
     static tf::TransformBroadcaster br;

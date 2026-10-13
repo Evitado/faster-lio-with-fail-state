@@ -1,0 +1,79 @@
+[31mWARNING: disk usage in log directory [/home/sumanth/.ros/log] is over 1GB.
+It's recommended that you use the 'rosclean' command.[0m
+[33m[ WARN] [1791905609.995571747]: profiling: recording to /home/sumanth/Desktop/evitado_nix_workspace/src/faster_lio/Log/baseline/faster_lio_2026-10-13_11-33-29.tracy (tracy-capture pid 659240, port 8186)[0m
+I20261013 11:33:30.010846 124627996338816 laser_mapping.cc:111] lidar_type 3
+I20261013 11:33:30.011005 124627996338816 laser_mapping.cc:120] Using OUST 64 Lidar
+[0;33mW20261013 11:33:33.823012 124627996338816 laser_mapping.cc:317] No point, skip this scan!
+[m[0;33mW20261013 11:33:33.900359 124627996338816 laser_mapping.cc:317] No point, skip this scan!
+[mI20261013 11:33:34.000624 124627996338816 imu_processing.hpp:313] IMU Initial Done
+[0;33mW20261013 11:33:34.000801 124627996338816 laser_mapping.cc:317] No point, skip this scan!
+[m[33m[ WARN] [1791905706.229381142]: catch sig 2[0m
+I20261013 11:35:06.236425 124627996338816 run_mapping_online.cc:56] finishing mapping
+I20261013 11:35:06.237085 124627996338816 laser_mapping.cc:989] finish done
+I20261013 11:35:06.242273 124627996338816 laser_mapping.h:37] laser mapping deconstruct
+[0m[ INFO] [1791905611.505453185]: Starting Lidar Odometry ..............![0m
+... logging to /home/sumanth/.ros/log/fd336d0a-c715-11f1-bda4-d3cc573aa9d1/roslaunch-work-659121.log
+Checking log directory for disk usage. This may take a while.
+Press Ctrl-C to interrupt
+]2;/home/sumanth/Desktop/evitado_nix_workspace/src/faster_lio/launch/evitado.launch
+[1mstarted roslaunch server http://work:46401/[0m
+
+SUMMARY
+========
+
+PARAMETERS
+ * /common/imu_topic: /main/imu
+ * /common/lid_topic: /main/ac_filtered...
+ * /common/time_sync_en: False
+ * /cube_side_length: 1000.0
+ * /esti_plane_threshold: 0.1
+ * /feature_extract_enable: False
+ * /filter_size_map: 0.5
+ * /filter_size_surf: 0.5
+ * /ivox_grid_resolution: 0.5
+ * /ivox_nearby_type: 18
+ * /lidar_odometry/base_link_frame: base_footprint_tug
+ * /lidar_odometry/global_frame: odom
+ * /lidar_odometry/lidar_frame: main_sensor_lidar
+ * /lidar_odometry/profiling_enable: True
+ * /lidar_odometry/profiling_port: 8186
+ * /lidar_odometry/profiling_save_path: /home/sumanth/Des...
+ * /mapping/acc_cov: 0.1
+ * /mapping/b_acc_cov: 0.0001
+ * /mapping/b_gyr_cov: 0.0001
+ * /mapping/det_range: 150.0
+ * /mapping/extrinsic_R: [1, 0, 0, 0, 1, 0...
+ * /mapping/extrinsic_T: [0.0, 0.0, 0.0]
+ * /mapping/extrinsic_est_en: True
+ * /mapping/fov_degree: 180
+ * /mapping/gyr_cov: 0.1
+ * /max_iteration: 3
+ * /path_save_en: False
+ * /pcd_save/interval: -1
+ * /pcd_save/pcd_save_en: False
+ * /point_filter_num: 3
+ * /point_filter_num_: 4
+ * /preprocess/blind: 4
+ * /preprocess/lidar_type: 3
+ * /preprocess/scan_line: 128
+ * /preprocess/time_scale: 1e-3
+ * /publish/dense_publish_en: False
+ * /publish/path_publish_en: False
+ * /publish/scan_bodyframe_pub_en: False
+ * /publish/scan_effect_pub_en: False
+ * /publish/scan_publish_en: False
+ * /rosdistro: noetic
+ * /rosversion: 1.17.0
+ * /runtime_pos_log_enable: False
+
+NODES
+  /
+    lidar_odometry (faster_lio/run_mapping_online)
+
+[1mROS_MASTER_URI=http://localhost:11311[0m
+]2;/home/sumanth/Desktop/evitado_nix_workspace/src/faster_lio/launch/evitado.launch http://localhost:11311
+[1mprocess[lidar_odometry-1]: started with pid [659228][0m
+[lidar_odometry-1] killing on exit
+shutting down processing monitor...
+... shutting down processing monitor complete
+[1mdone[0m

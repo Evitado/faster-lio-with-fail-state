@@ -10,6 +10,7 @@
 #include <fstream>
 
 #include "common_lib.h"
+#include "profiling.h"
 #include "so3_math.h"
 #include "use-ikfom.hpp"
 #include "utils.h"
@@ -164,6 +165,7 @@ void ImuProcess::IMUInit(const common::MeasureGroup &meas, esekfom::esekf<state_
 
 void ImuProcess::UndistortPcl(const common::MeasureGroup &meas, esekfom::esekf<state_ikfom, 12, input_ikfom> &kf_state,
                               PointCloudType &pcl_out) {
+    PROFILE_SCOPE("undistort");
     /*** add the imu_ of the last frame-tail to the of current frame-head ***/
     auto v_imu = meas.imu_;
     v_imu.push_front(last_imu_);
@@ -286,6 +288,7 @@ void ImuProcess::UndistortPcl(const common::MeasureGroup &meas, esekfom::esekf<s
 
 void ImuProcess::Process(const common::MeasureGroup &meas, esekfom::esekf<state_ikfom, 12, input_ikfom> &kf_state,
                          PointCloudType::Ptr cur_pcl_un_) {
+    PROFILE_SCOPE("imu process");
     if (meas.imu_.empty()) {
         return;
     }

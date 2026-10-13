@@ -2,6 +2,8 @@
 
 #include <glog/logging.h>
 
+#include "profiling.h"
+
 namespace faster_lio {
 
 void PointCloudPreprocess::Set(LidarType lid_type, double bld, int pfilt_num) {
@@ -11,6 +13,7 @@ void PointCloudPreprocess::Set(LidarType lid_type, double bld, int pfilt_num) {
 }
 
 void PointCloudPreprocess::Process(const sensor_msgs::PointCloud2::ConstPtr &msg, PointCloudType::Ptr &pcl_out) {
+    PROFILE_SCOPE("preprocess");
     switch (lidar_type_) {
         case LidarType::OUST64:
             Oust64Handler(msg);

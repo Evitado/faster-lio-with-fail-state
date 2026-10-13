@@ -28,6 +28,13 @@ else ()
     message("USING_IVOX_NODE_TYPE_DEFAULT")
 endif()
 
+# profiling (see profiling/README.md): compiled in, switched on at runtime with ~profiling_enable
+option(FASTER_LIO_TRACY "Compile in the Tracy profiler client (dormant unless ~profiling_enable)" ON)
+set(FASTER_LIO_TRACY_DIR "${CMAKE_CURRENT_SOURCE_DIR}/foreign/tracy"
+    CACHE PATH "Tracy source tree providing public/TracyClient.cpp (same commit as tracy-capture)")
+set(FASTER_LIO_TRACY_CAPTURE "${CMAKE_CURRENT_SOURCE_DIR}/profiling/tracy-tools/bin/tracy-capture"
+    CACHE FILEPATH "tracy-capture the node starts for ~profiling_enable (falls back to tracy-capture in PATH)")
+
 add_subdirectory(src)
 add_subdirectory(app)
 
