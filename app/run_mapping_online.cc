@@ -1,13 +1,7 @@
 #include <ros/ros.h>
-#include <csignal>
 
 #include "laser_mapping.h"
 #include "profiling.h"
-
-void SigHandle(int sig) {
-    faster_lio::options::FLAG_EXIT = true;
-    ROS_WARN("catch sig %d", sig);
-}
 
 int main(int argc, char **argv) {
     ros::init(argc, argv, "faster_lio");
@@ -24,23 +18,8 @@ int main(int argc, char **argv) {
     auto laser_mapping = std::make_shared<faster_lio::LaserMapping>();
     laser_mapping->InitROS(nh, pnh);
 
-    signal(SIGINT, SigHandle);
-    ros::Rate rate(100);
-
-    while (ros::ok()) {
-        if (faster_lio::options::FLAG_EXIT) {
-            break;
-        }
-        {
-            PROFILE_SCOPE("ros::spinOnce");
-            ros::spinOnce();
-        }
-        laser_mapping->Run();
-        {
-            PROFILE_SCOPE("idle (rate.sleep)");
-            rate.sleep();
-        }
-    }
+    // scans are processed from the lidar and IMU callbacks; returns on shutdown (SIGINT, rosnode kill)
+    ros::spin();
 
     faster_lio::profiling::Stop();
     return 0;

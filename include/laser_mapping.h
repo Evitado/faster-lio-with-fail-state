@@ -9,7 +9,6 @@
 #include <tbb/global_control.h>
 #include <tf/transform_listener.h>
 #include <atomic>
-#include <mutex>
 
 #include "common_lib.h"
 #include "faster_lio/SaveTrajectory.h"
@@ -28,6 +27,7 @@ class LaserMapping {
 
     bool InitROS(const ros::NodeHandle &nh, const ros::NodeHandle &pnh);
 
+    /// processes every buffered scan the IMU data covers; called from the lidar and IMU callbacks
     void Run();
     // services
     bool startLIO(std_srvs::Empty::Request &req, std_srvs::Empty::Response &res);
@@ -62,6 +62,9 @@ class LaserMapping {
     void PointBodyLidarToIMU(PointType const *const pi, PointType *const po);
 
     void MapIncremental();
+
+    /// IMU process, IEKF update, map update and publishing of the scan SyncPackages put into measures_
+    void ProcessScan();
 
     /// per-scan profiler plots and frame mark (no-op unless built with FASTER_LIO_TRACY)
     void ProfileScan();
@@ -119,7 +122,6 @@ class LaserMapping {
     tf::StampedTransform lidar_to_base_;  // last good lidar->base_link transform
     bool has_lidar_to_base_ = false;
 
-    std::mutex mtx_buffer_;
     std::deque<double> time_buffer_;
     std::deque<CloudPtr> lidar_buffer_;
     std::deque<sensor_msgs::Imu::ConstPtr> imu_buffer_;

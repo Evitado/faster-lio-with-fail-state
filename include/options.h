@@ -16,7 +16,6 @@ constexpr int MIN_NUM_MATCH_POINTS = 3;  // minimum matched points in current
 /// configurable params
 extern int NUM_MAX_ITERATIONS;      // max iterations of ekf
 extern float ESTI_PLANE_THRESHOLD;  // plane threshold
-extern bool FLAG_EXIT;              // flag for exitting
 
 }  // namespace faster_lio::options
 

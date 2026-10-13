@@ -106,11 +106,20 @@ void LaserMapping::SubAndPubToROS() {
     nh_.param<std::string>("common/lid_topic", lidar_topic, "/livox/lidar");
     nh_.param<std::string>("common/imu_topic", imu_topic, "/livox/imu");
 
-    sub_pcl_ = nh_.subscribe<sensor_msgs::PointCloud2>(
-        lidar_topic, 200000, [this](const sensor_msgs::PointCloud2::ConstPtr &msg) { StandardPCLCallBack(msg); });
+    // event driven, all on the ros::spin thread: a scan is processed as soon as the IMU covers it up to its end,
+    // which is usually an IMU message after the cloud arrived
+    sub_pcl_ = nh_.subscribe<sensor_msgs::PointCloud2>(lidar_topic, 200000,
+                                                       [this](const sensor_msgs::PointCloud2::ConstPtr &msg) {
+                                                           StandardPCLCallBack(msg);
+                                                           Run();
+                                                       });
 
-    sub_imu_ = nh_.subscribe<sensor_msgs::Imu>(imu_topic, 200000,
-                                               [this](const sensor_msgs::Imu::ConstPtr &msg) { IMUCallBack(msg); });
+    sub_imu_ = nh_.subscribe<sensor_msgs::Imu>(imu_topic, 200000, [this](const sensor_msgs::Imu::ConstPtr &msg) {
+        IMUCallBack(msg);
+        if (!lidar_buffer_.empty() && last_timestamp_imu_ >= lidar_end_time_) {
+            Run();
+        }
+    });
 
     // ROS publisher init
     path_.header.stamp = ros::Time::now();
@@ -178,10 +187,14 @@ bool LaserMapping::saveTrajectory(faster_lio::SaveTrajectory::Request &req,
 }
 
 void LaserMapping::Run() {
-    PROFILE_SCOPE("LaserMapping::Run");
-    if (!SyncPackages()) {
-        return;
+    // every buffered scan the IMU already covers, oldest first
+    while (SyncPackages()) {
+        ProcessScan();
     }
+}
+
+void LaserMapping::ProcessScan() {
+    PROFILE_SCOPE("LaserMapping::ProcessScan");
     obs_model_calls_ = 0;
 
     /// IMU process, kf prediction, undistortion
@@ -290,7 +303,6 @@ void LaserMapping::ProfileScan() {
 
 void LaserMapping::StandardPCLCallBack(const sensor_msgs::PointCloud2::ConstPtr &msg) {
     PROFILE_SCOPE("lidar callback");
-    mtx_buffer_.lock();
     if (msg->header.stamp.toSec() < last_timestamp_lidar_) {
         ROS_ERROR_STREAM("lidar loop back, clear buffer");
         lidar_buffer_.clear();
@@ -301,15 +313,12 @@ void LaserMapping::StandardPCLCallBack(const sensor_msgs::PointCloud2::ConstPtr 
     lidar_buffer_.push_back(ptr);
     time_buffer_.push_back(msg->header.stamp.toSec());
     last_timestamp_lidar_ = msg->header.stamp.toSec();
-
-    mtx_buffer_.unlock();
 }
 
 void LaserMapping::IMUCallBack(const sensor_msgs::Imu::ConstPtr &msg_in) {
     PROFILE_SCOPE("imu callback");
     const double timestamp = msg_in->header.stamp.toSec();
 
-    mtx_buffer_.lock();
     if (timestamp < last_timestamp_imu_) {
         ROS_WARN_STREAM("imu loop back, clear buffer");
         imu_buffer_.clear();
@@ -317,7 +326,6 @@ void LaserMapping::IMUCallBack(const sensor_msgs::Imu::ConstPtr &msg_in) {
 
     last_timestamp_imu_ = timestamp;
     imu_buffer_.emplace_back(msg_in);
-    mtx_buffer_.unlock();
 }
 
 bool LaserMapping::SyncPackages() {

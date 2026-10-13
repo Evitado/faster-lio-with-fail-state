@@ -49,8 +49,6 @@ def main():
     print(f"\n{trace}\nprocessed scans: {scans}\n")
     print(f"{'zone':32} {'calls':>8} {'mean ms':>9} {'max ms':>9} {'ms/scan':>9}")
     for z in zones:
-        if z["name"] in ("idle (rate.sleep)",):
-            continue
         total_ms = float(z["total_ns"]) / 1e6
         per_scan = total_ms / scans if scans else float("nan")
         print(f"{z['name'][:32]:32} {int(z['counts']):8d} {float(z['mean_ns']) / 1e6:9.3f} "
