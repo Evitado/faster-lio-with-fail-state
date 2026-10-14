@@ -70,6 +70,8 @@ class LaserMapping {
     void SubAndPubToROS();
 
     bool LoadParams();
+    /// restart the odometry from a fresh map with the sensor at the origin of global_frame_ (start_lidar_odom)
+    void ResetOdometry();
 
    private:
     /// modules

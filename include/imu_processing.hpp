@@ -30,6 +30,8 @@ class ImuProcess {
     void SetAccBiasCov(const common::V3D &b_a);
     void Process(const common::MeasureGroup &meas, esekfom::esekf<state_ikfom, 12, input_ikfom> &kf_state,
                  CloudPtr pcl_un_);
+    /// covariance the filter starts from after the IMU init
+    static void SetInitialCovariance(esekfom::esekf<state_ikfom, 12, input_ikfom> &kf_state);
 
     Eigen::Matrix<double, 12, 12> Q_;
     common::V3D cov_acc_;
@@ -139,6 +141,11 @@ void ImuProcess::IMUInit(const common::MeasureGroup &meas, esekfom::esekf<state_
     init_state.offset_R_L_I = Lidar_R_wrt_IMU_;
     kf_state.change_x(init_state);
 
+    SetInitialCovariance(kf_state);
+    last_imu_ = meas.imu_.back();
+}
+
+void ImuProcess::SetInitialCovariance(esekfom::esekf<state_ikfom, 12, input_ikfom> &kf_state) {
     esekfom::esekf<state_ikfom, 12, input_ikfom>::cov init_P = kf_state.get_P();
     init_P.setIdentity();
     init_P(6, 6) = init_P(7, 7) = init_P(8, 8) = 0.00001;
@@ -147,7 +154,6 @@ void ImuProcess::IMUInit(const common::MeasureGroup &meas, esekfom::esekf<state_
     init_P(18, 18) = init_P(19, 19) = init_P(20, 20) = 0.001;
     init_P(21, 21) = init_P(22, 22) = 0.00001;
     kf_state.change_P(init_P);
-    last_imu_ = meas.imu_.back();
 }
 
 void ImuProcess::UndistortPcl(const common::MeasureGroup &meas, esekfom::esekf<state_ikfom, 12, input_ikfom> &kf_state,

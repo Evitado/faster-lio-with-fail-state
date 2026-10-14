@@ -148,11 +148,30 @@ LaserMapping::LaserMapping() {
 }
 
 bool LaserMapping::startLIO(std_srvs::Empty::Request &req, std_srvs::Empty::Response &res) {
-    path_.poses.clear();
-    trajectory_.clear();
+    ResetOdometry();
     lidar_odom_ = true;
     ROS_INFO("Starting Lidar Odometry ..............!");
     return true;
+}
+
+void LaserMapping::ResetOdometry() {
+    // While stopped the filter keeps integrating the IMU without lidar corrections, so its pose and velocity drift,
+    // and the map still holds the previous session (e.g. the previous aircraft). Start over from a fresh map with
+    // the sensor at the origin, keeping the biases, extrinsic and gravity (re-expressed in the sensor frame).
+    state_ikfom s = kf_.get_x();
+    const common::V3D grav_body = s.rot.conjugate() * s.grav.get_vect();
+    s.rot = Eigen::Quaterniond::Identity();
+    s.pos.setZero();
+    s.vel.setZero();
+    s.grav = S2(grav_body);
+    kf_.change_x(s);
+    ImuProcess::SetInitialCovariance(kf_);
+    state_point_ = s;
+
+    ivox_ = std::make_shared<IVoxType>(ivox_options_);
+    flg_first_scan_ = true;
+    path_.poses.clear();
+    trajectory_.clear();
 }
 
 bool LaserMapping::stopLIO(std_srvs::Empty::Request &req, std_srvs::Empty::Response &res) {
@@ -227,10 +246,13 @@ void LaserMapping::ProcessScan() {
 
     /// the first scan
     if (flg_first_scan_) {
+        // the first scan seeds the map at the current pose (one scan of IMU prediction after ResetOdometry)
+        state_point_ = kf_.get_x();
         MapPointVector first_points;
         first_points.reserve(scan_undistort_->size());
         for (const auto &pt : *scan_undistort_) {
-            first_points.emplace_back(pt.x, pt.y, pt.z);
+            const PointType p_world = PointBodyToWorld(pt);
+            first_points.emplace_back(p_world.x, p_world.y, p_world.z);
         }
         ivox_->AddPoints(first_points);
         first_lidar_time_ = measures_.lidar_bag_time_;
