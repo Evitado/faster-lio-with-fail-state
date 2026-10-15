@@ -148,6 +148,11 @@ LaserMapping::LaserMapping() {
 }
 
 bool LaserMapping::startLIO(std_srvs::Empty::Request &req, std_srvs::Empty::Response &res) {
+    if (lidar_odom_) {
+        // several nodes call this service; a start while running must not throw away the map and pose
+        ROS_INFO("Lidar odometry already running, start ignored");
+        return true;
+    }
     ResetOdometry();
     lidar_odom_ = true;
     ROS_INFO("Starting Lidar Odometry ..............!");
@@ -269,7 +274,7 @@ void LaserMapping::ProcessScan() {
 
     int cur_pts = scan_down_body_->size();
     if (cur_pts < 5) {
-        lidar_odom_ = false;
+        // skip only this scan: the IMU prediction carries the state to the next one, odometry keeps running
         ROS_WARN_STREAM("Too few points, skip this scan!" << scan_undistort_->size() << ", " << scan_down_body_->size());
         return;
     }
@@ -543,8 +548,10 @@ void LaserMapping::ObsModel(state_ikfom &s, esekfom::dyn_share_datastruct<double
 
                 bool valid_corr = p_body.norm() > 81 * pd2 * pd2;
                 if (valid_corr) {
-                    point_selected_surf_[i] = true;
                     residuals_[i] = pd2;
+                } else {
+                    // outlier: drop it, or it enters the update with a residual left from an earlier iteration/scan
+                    point_selected_surf_[i] = false;
                 }
             }
         }

@@ -262,7 +262,8 @@ void ImuProcess::UndistortPcl(const common::MeasureGroup &meas, esekfom::esekf<s
     const common::V3D &T_LI = imu_state.offset_T_L_I;
 
     auto it_pcl = pcl_out.end() - 1;
-    for (auto it_kp = IMUpose_.end() - 1; it_kp != IMUpose_.begin(); it_kp--) {
+    bool all_compensated = false;  // the first point is done: stop, or the next segment would compensate it again
+    for (auto it_kp = IMUpose_.end() - 1; it_kp != IMUpose_.begin() && !all_compensated; it_kp--) {
         auto head = it_kp - 1;
         auto tail = it_kp;
         R_imu = common::MatFromArray(head->rot);
@@ -301,6 +302,7 @@ void ImuProcess::UndistortPcl(const common::MeasureGroup &meas, esekfom::esekf<s
             it_pcl->z = p_compensate(2);
 
             if (it_pcl == pcl_out.begin()) {
+                all_compensated = true;
                 break;
             }
         }

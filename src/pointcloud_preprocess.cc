@@ -15,14 +15,20 @@ void PointCloudPreprocess::Process(const sensor_msgs::PointCloud2::ConstPtr &msg
 
 
 namespace {
-/// byte offset of a field with this name and datatype, or -1; a field with another datatype counts as missing
+/// byte offset of a 4-byte field with this name and datatype, or -1; a field with another datatype, or one that does
+/// not fit inside a point, counts as missing
 int FieldOffset(const sensor_msgs::PointCloud2 &msg, const char *name, uint8_t datatype) {
     for (const auto &field : msg.fields) {
-        if (field.name == name && field.datatype == datatype && field.count >= 1) {
+        if (field.name == name && field.datatype == datatype && field.count >= 1 &&
+            size_t(field.offset) + 4 <= msg.point_step) {
             return field.offset;
         }
     }
     return -1;
+}
+
+bool HasField(const sensor_msgs::PointCloud2 &msg, const char *name) {
+    return std::any_of(msg.fields.begin(), msg.fields.end(), [&](const auto &field) { return field.name == name; });
 }
 
 template <typename T>
@@ -51,6 +57,9 @@ void PointCloudPreprocess::Ouster128Handler(const sensor_msgs::PointCloud2::Cons
     const int off_intensity = FieldOffset(*msg, "intensity", PointField::FLOAT32);
     // When the merged cloud has no 't' field, deskewing is done upstream; treat all points as simultaneous.
     const int off_t = FieldOffset(*msg, "t", PointField::UINT32);
+    if (off_t < 0 && HasField(*msg, "t")) {
+        ROS_WARN_THROTTLE(5.0, "point cloud field 't' is not a uint32 [ns] inside the point, scans are not deskewed");
+    }
     const double blind2 = blind_ * blind_;
     cloud_out_.reserve(num_points / point_filter_num_ + 1);
 
