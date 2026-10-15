@@ -8,8 +8,6 @@ namespace faster_lio {
 typedef MTK::vect<3, double> vect3;
 typedef MTK::SO3<double> SO3;
 typedef MTK::S2<double, 98090, 10000, 1> S2;
-typedef MTK::vect<1, double> vect1;
-typedef MTK::vect<2, double> vect2;
 
 MTK_BUILD_MANIFOLD(state_ikfom, ((vect3, pos))((SO3, rot))((SO3, offset_R_L_I))((vect3, offset_T_L_I))((vect3, vel))(
                                     (vect3, bg))((vect3, ba))((S2, grav)));
@@ -69,40 +67,6 @@ Eigen::Matrix<double, 24, 12> df_dw(state_ikfom &s, const input_ikfom &in) {
     cov.template block<3, 3>(15, 6) = Eigen::Matrix3d::Identity();
     cov.template block<3, 3>(18, 9) = Eigen::Matrix3d::Identity();
     return cov;
-}
-
-vect3 SO3ToEuler(const SO3 &orient) {
-    Eigen::Matrix<double, 3, 1> _ang;
-    Eigen::Vector4d q_data = orient.coeffs().transpose();
-    // scalar w=orient.coeffs[3], x=orient.coeffs[0], y=orient.coeffs[1], z=orient.coeffs[2];
-    double sqw = q_data[3] * q_data[3];
-    double sqx = q_data[0] * q_data[0];
-    double sqy = q_data[1] * q_data[1];
-    double sqz = q_data[2] * q_data[2];
-    double unit = sqx + sqy + sqz + sqw;  // if normalized is one, otherwise is correction factor
-    double test = q_data[3] * q_data[1] - q_data[2] * q_data[0];
-
-    if (test > 0.49999 * unit) {  // singularity at north pole
-
-        _ang << 2 * std::atan2(q_data[0], q_data[3]), M_PI / 2, 0;
-        double temp[3] = {_ang[0] * 57.3, _ang[1] * 57.3, _ang[2] * 57.3};
-        vect3 euler_ang(temp, 3);
-        return euler_ang;
-    }
-    if (test < -0.49999 * unit) {  // singularity at south pole
-        _ang << -2 * std::atan2(q_data[0], q_data[3]), -M_PI / 2, 0;
-        double temp[3] = {_ang[0] * 57.3, _ang[1] * 57.3, _ang[2] * 57.3};
-        vect3 euler_ang(temp, 3);
-        return euler_ang;
-    }
-
-    _ang << std::atan2(2 * q_data[0] * q_data[3] + 2 * q_data[1] * q_data[2], -sqx - sqy + sqz + sqw),
-        std::asin(2 * test / unit),
-        std::atan2(2 * q_data[2] * q_data[3] + 2 * q_data[1] * q_data[0], sqx - sqy - sqz + sqw);
-    double temp[3] = {_ang[0] * 57.3, _ang[1] * 57.3, _ang[2] * 57.3};
-    vect3 euler_ang(temp, 3);
-    // euler_ang[0] = roll, euler_ang[1] = pitch, euler_ang[2] = yaw
-    return euler_ang;
 }
 
 }  // namespace faster_lio
