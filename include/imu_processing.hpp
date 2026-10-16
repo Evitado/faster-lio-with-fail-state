@@ -1,6 +1,7 @@
 #ifndef FASTER_LIO_IMU_PROCESSING_H
 #define FASTER_LIO_IMU_PROCESSING_H
 
+#include <ros/assert.h>
 #include <ros/console.h>
 #include <sensor_msgs/Imu.h>
 #include <cmath>
