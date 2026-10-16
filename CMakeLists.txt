@@ -22,13 +22,24 @@ add_subdirectory(src)
 add_subdirectory(app)
 
 if (CATKIN_ENABLE_TESTING)
-    catkin_add_gtest(${PROJECT_NAME}-test-point-cloud test/point_cloud_test.cc)
-    if (TARGET ${PROJECT_NAME}-test-point-cloud)
-        # header-only code under test: no need for the library (TBB, Tracy)
-        target_include_directories(${PROJECT_NAME}-test-point-cloud PRIVATE
-                ${PROJECT_SOURCE_DIR}/include ${catkin_INCLUDE_DIRS} ${EIGEN3_INCLUDE_DIR})
-        target_link_libraries(${PROJECT_NAME}-test-point-cloud ${catkin_LIBRARIES})
-    endif ()
+    # the tests build the code under test from headers / sources instead of linking the library: no TBB, and
+    # without FASTER_LIO_TRACY the profiling macros are no-ops
+    function(faster_lio_add_test name)  # further arguments: sources
+        catkin_add_gtest(${PROJECT_NAME}-test-${name} ${ARGN})
+        if (TARGET ${PROJECT_NAME}-test-${name})
+            target_include_directories(${PROJECT_NAME}-test-${name} PRIVATE
+                    ${PROJECT_SOURCE_DIR}/include ${catkin_INCLUDE_DIRS} ${EIGEN3_INCLUDE_DIR})
+            target_link_libraries(${PROJECT_NAME}-test-${name} ${catkin_LIBRARIES})
+            add_dependencies(${PROJECT_NAME}-test-${name} ${PROJECT_NAME}_gencpp)  # faster_lio/Pose6D.h
+        endif ()
+    endfunction()
+
+    faster_lio_add_test(point-cloud test/point_cloud_test.cc)
+    faster_lio_add_test(voxel-table test/voxel_table_test.cc)
+    faster_lio_add_test(ivox test/ivox_test.cc)
+    faster_lio_add_test(common-lib test/common_lib_test.cc)
+    faster_lio_add_test(pointcloud-preprocess test/pointcloud_preprocess_test.cc src/pointcloud_preprocess.cc)
+    faster_lio_add_test(imu-processing test/imu_processing_test.cc)
 endif ()
 
 foreach(dir config launch)
