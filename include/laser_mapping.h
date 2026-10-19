@@ -166,7 +166,7 @@ class LaserMapping {
 
     /// odometry pose of every scan since the last start_lidar_odom, written out by the save_trajectory service
     struct TrajectoryPose {
-        double stamp;
+        ros::Time stamp;
         common::V3D pos;
         Eigen::Quaterniond rot;
     };

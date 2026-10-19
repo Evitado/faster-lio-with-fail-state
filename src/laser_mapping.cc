@@ -198,8 +198,8 @@ bool LaserMapping::saveTrajectory(faster_lio::SaveTrajectory::Request &req,
     }
     std::fprintf(f, "# timestamp tx ty tz qx qy qz qw\n");
     for (const auto &p : trajectory_) {
-        std::fprintf(f, "%.9f %.9f %.9f %.9f %.9f %.9f %.9f %.9f\n", p.stamp, p.pos.x(), p.pos.y(), p.pos.z(),
-                     p.rot.x(), p.rot.y(), p.rot.z(), p.rot.w());
+        std::fprintf(f, "%u.%09u %.9f %.9f %.9f %.9f %.9f %.9f %.9f\n", p.stamp.sec, p.stamp.nsec, p.pos.x(), p.pos.y(),
+                     p.pos.z(), p.rot.x(), p.rot.y(), p.rot.z(), p.rot.w());
     }
     res.success = std::fclose(f) == 0;
     res.message = res.success ? "saved " + std::to_string(trajectory_.size()) + " poses to " + file.string()
@@ -304,7 +304,7 @@ void LaserMapping::ProcessScan() {
         MapIncremental();
     }
 
-    trajectory_.push_back({lidar_end_time_, state_point_.pos, Eigen::Quaterniond(state_point_.rot)});
+    trajectory_.push_back({lidar_end_stamp_, state_point_.pos, Eigen::Quaterniond(state_point_.rot)});
 
     // publish
     PublishConditionNumber();
