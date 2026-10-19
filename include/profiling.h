@@ -132,6 +132,8 @@ inline void PlotProcessStats() {
 
 #else
 
+#include <ros/console.h>
+
 #define PROFILE_SCOPE(name)
 #define PROFILE_FRAME()
 #define PROFILE_PLOT(name, value)
@@ -139,7 +141,10 @@ inline void PlotProcessStats() {
 #define PROFILE_THREAD_NAME(name)
 
 namespace faster_lio::profiling {
-inline bool Start(const std::string &, int) { return false; }
+inline bool Start(const std::string &, int) {
+    ROS_WARN("~profiling_enable is set, but this build has no profiler (FASTER_LIO_TRACY is off)");
+    return false;
+}
 inline void Stop() {}
 inline void PlotProcessStats() {}
 }  // namespace faster_lio::profiling

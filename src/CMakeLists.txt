@@ -17,10 +17,6 @@ target_link_libraries(${PROJECT_NAME}
         )
 
 if (FASTER_LIO_TRACY)
-    if (NOT EXISTS "${FASTER_LIO_TRACY_DIR}/public/TracyClient.cpp")
-        message(FATAL_ERROR "FASTER_LIO_TRACY: no Tracy client in FASTER_LIO_TRACY_DIR=${FASTER_LIO_TRACY_DIR}"
-                " (git submodule update --init foreign/tracy)")
-    endif ()
     message(STATUS "faster_lio: Tracy client compiled in (${FASTER_LIO_TRACY_DIR}), recorder ${FASTER_LIO_TRACY_CAPTURE}")
     # one Tracy client per process, compiled into the library the executables link
     target_sources(${PROJECT_NAME} PRIVATE "${FASTER_LIO_TRACY_DIR}/public/TracyClient.cpp" profiling.cc)
