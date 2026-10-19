@@ -106,7 +106,7 @@ class LaserMapping {
     std::vector<common::V3F> search_pos_;             // world position of each point at its last nn search
     std::vector<uint8_t> plane_ok_;                   // whether that search gave a valid plane
     bool searched_this_scan_ = false;                 // an nn search already ran for the current scan
-    float nn_reuse_distance_ = 0.0f;                  // re-search only points that moved more than this [m]; 0: always
+    float nn_reuse_distance_ = 0.01f;                 // re-search only points that moved more than this [m]; 0: always
 
     /// ros pub and sub stuffs
     ros::NodeHandle nh_;
