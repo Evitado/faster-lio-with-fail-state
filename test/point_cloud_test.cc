@@ -157,6 +157,36 @@ TEST(VoxelDownsample, OnlyNonFinitePointsGivesEmptyOutput) {
     EXPECT_TRUE(out.empty());
 }
 
+TEST(VoxelDownsample, GridTooLargeKeepsCloud) {
+    // 1e8 voxels per axis at 1 cm: far more than INT32_MAX voxels, returned as is (like pcl::VoxelGrid)
+    const PointCloudType in{MakePoint(0, 0, 0, 1), MakePoint(1e6f, 1e6f, 1e6f, 2), MakePoint(0.001f, 0, 0, 3)};
+    PointCloudType out;
+    VoxelDownsample(in, 0.01f, out);
+    ASSERT_EQ(out.size(), in.size());
+    for (size_t i = 0; i < in.size(); ++i) {
+        ExpectPointNear(out[i], in[i], 0);
+    }
+}
+
+TEST(VoxelDownsample, IndicesOutsideIntKeepCloud) {
+    // a compact cloud, but 1e10 m out: its voxel indices (1e11) do not fit an int
+    const PointCloudType in{MakePoint(1e10f, 0, 0), MakePoint(1e10f, 0.01f, 0)};
+    PointCloudType out;
+    VoxelDownsample(in, 0.1f, out);
+    ASSERT_EQ(out.size(), in.size());
+    ExpectPointNear(out[1], in[1], 0);
+}
+
+TEST(VoxelDownsample, LargeGridBelowTheLimitIsDownsampled) {
+    // 1000^3 = 1e9 voxels, below INT32_MAX
+    const PointCloudType in{MakePoint(0.1f, 0.1f, 0.1f), MakePoint(0.2f, 0.2f, 0.2f), MakePoint(999.5f, 999.5f, 999.5f)};
+    PointCloudType out;
+    VoxelDownsample(in, 1.0f, out);
+    ASSERT_EQ(out.size(), 2u);
+    ExpectPointNear(out[0], MakePoint(0.15f, 0.15f, 0.15f));
+    ExpectPointNear(out[1], MakePoint(999.5f, 999.5f, 999.5f));
+}
+
 TEST(VoxelDownsample, MatchesReferenceOnRandomClouds) {
     std::mt19937 rng(42);
     std::uniform_real_distribution<float> coord(-20.0f, 20.0f);

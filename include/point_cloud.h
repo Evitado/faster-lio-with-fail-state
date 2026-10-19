@@ -49,6 +49,8 @@ using MapPointVector = std::vector<MapPointType>;
 /**
  * Voxel grid downsampling, same result as pcl::VoxelGrid: every occupied voxel of side `leaf` (grid anchored at the
  * cloud's bounding box) is replaced by the mean of its points, all fields averaged, output ordered by voxel index.
+ * Like pcl::VoxelGrid, a cloud whose grid would have more than INT32_MAX voxels (leaf too small for its extent, e.g.
+ * points thrown far out by a diverged state), or whose voxel indices do not fit an int, is returned unchanged.
  */
 inline void VoxelDownsample(const PointCloudType &in, float leaf, PointCloudType &out) {
     out.clear();
@@ -71,8 +73,18 @@ inline void VoxelDownsample(const PointCloudType &in, float leaf, PointCloudType
     if ((min_p > max_p).any()) {  // no finite point
         return;
     }
-    const Eigen::Array3i min_b = (min_p * inv_leaf).floor().cast<int>();
-    const Eigen::Array3i max_b = (max_p * inv_leaf).floor().cast<int>();
+    // the grid size is checked before casting: for such a grid the int voxel indices below would overflow. The bounds
+    // are floored in float like the point indices, so every index lies inside them.
+    const Eigen::Array3f min_bf = (min_p * inv_leaf).floor();
+    const Eigen::Array3f max_bf = (max_p * inv_leaf).floor();
+    constexpr float kIntRange = 2147483648.0f;  // 2^31: |bound| below it casts to int
+    if ((max_bf.cast<double>() - min_bf.cast<double>() + 1).prod() > double(std::numeric_limits<int32_t>::max()) ||
+        (min_bf.abs().max(max_bf.abs()) >= kIntRange).any()) {
+        out = in;
+        return;
+    }
+    const Eigen::Array3i min_b = min_bf.cast<int>();
+    const Eigen::Array3i max_b = max_bf.cast<int>();
     const Eigen::Array3i div = max_b - min_b + 1;
     const uint64_t mul_y = uint64_t(div.x());
     const uint64_t mul_z = mul_y * uint64_t(div.y());
