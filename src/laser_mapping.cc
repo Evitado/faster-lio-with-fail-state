@@ -17,6 +17,8 @@ namespace {
 constexpr double INIT_TIME = 0.1;          // seconds after the first scan before points are added selectively
 constexpr double LASER_POINT_COV = 0.001;  // measurement covariance of a point-to-plane residual
 constexpr int NUM_MATCH_POINTS = 5;        // nearest map points searched per scan point
+// scans without enough points for this long in a row [s] stop the odometry: past it the IMU-only prediction drifts
+constexpr double MAX_SKIPPED_SCAN_TIME = 0.5;
 }  // namespace
 
 bool LaserMapping::InitROS(const ros::NodeHandle &nh, const ros::NodeHandle &pnh) {
@@ -168,6 +170,7 @@ void LaserMapping::ResetOdometry() {
 
     ivox_ = std::make_shared<IVoxType>(ivox_options_);
     flg_first_scan_ = true;
+    first_skipped_scan_time_ = -1;
     path_.poses.clear();
     trajectory_.clear();
 }
@@ -304,6 +307,7 @@ void LaserMapping::ProcessScan() {
         MapIncremental();
     }
 
+    first_skipped_scan_time_ = -1;
     trajectory_.push_back({lidar_end_stamp_, state_point_.pos, Eigen::Quaterniond(state_point_.rot)});
 
     // publish
@@ -322,8 +326,20 @@ void LaserMapping::ProcessScan() {
 
 void LaserMapping::PublishSkippedScan() {
     // Without enough points there is no filter update, but odometry and TF keep going with the IMU prediction and
-    // the keypoints carry the few points there are: odometry_fail_state sees the too-small cloud and stops the LIO
-    // after enough of them in a row, rather than getting no messages and never firing.
+    // the keypoints carry the few points there are, so odometry_fail_state sees the too-small cloud. Past
+    // MAX_SKIPPED_SCAN_TIME of such scans the odometry stops itself, as main did: fail_state may already be in its
+    // fail state (it only acts on a change) when something else starts the LIO, which would then coast on the IMU
+    // and publish its drift as live odometry. Stopped, it publishes as such until start_lidar_odom.
+    if (first_skipped_scan_time_ < 0) {
+        first_skipped_scan_time_ = measures_.lidar_bag_time_;
+    }
+    if (measures_.lidar_bag_time_ - first_skipped_scan_time_ >= MAX_SKIPPED_SCAN_TIME) {
+        ROS_WARN("no usable lidar points for %.1f s, lidar odometry stopped (start_lidar_odom restarts it)",
+                 measures_.lidar_bag_time_ - first_skipped_scan_time_);
+        lidar_odom_ = false;
+        first_skipped_scan_time_ = -1;
+        path_.poses.clear();
+    }
     state_point_ = kf_.get_x();
     scan_down_world_->clear();
     scan_down_world_->reserve(scan_down_body_->size());

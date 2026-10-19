@@ -66,7 +66,8 @@ class LaserMapping {
 
     /// per-scan profiler plots and frame mark (no-op unless built with FASTER_LIO_TRACY)
     void ProfileScan();
-    /// odometry (IMU prediction) and keypoints for a scan with too few points to update the filter
+    /// odometry (IMU prediction) and keypoints for a scan with too few points to update the filter; stops the
+    /// odometry once such scans went on for too long
     void PublishSkippedScan();
 
     void SubAndPubToROS();
@@ -142,6 +143,7 @@ class LaserMapping {
 
     /// statistics and flags ///
     bool flg_first_scan_ = true;
+    double first_skipped_scan_time_ = -1;  // start of the current run of skipped scans [s], < 0: none
     bool flg_EKF_inited_ = false;
     double lidar_mean_scantime_ = 0.0;
     int scan_num_ = 0;
