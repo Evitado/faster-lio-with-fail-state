@@ -160,18 +160,11 @@ bool LaserMapping::startLIO(std_srvs::Empty::Request &req, std_srvs::Empty::Resp
 }
 
 void LaserMapping::ResetOdometry() {
-    // While stopped the filter keeps integrating the IMU without lidar corrections, so its pose and velocity drift,
-    // and the map still holds the previous session (e.g. the previous aircraft). Start over from a fresh map with
-    // the sensor at the origin, keeping the biases, extrinsic and gravity (re-expressed in the sensor frame).
-    state_ikfom s = kf_.get_x();
-    const common::V3D grav_body = s.rot.conjugate() * s.grav.get_vect();
-    s.rot = Eigen::Quaterniond::Identity();
-    s.pos.setZero();
-    s.vel.setZero();
-    s.grav = S2(grav_body);
-    kf_.change_x(s);
-    ImuProcess::SetInitialCovariance(kf_);
-    state_point_ = s;
+    // While stopped the filter keeps integrating the IMU without lidar corrections, so its pose, velocity and tilt
+    // drift, and the map still holds the previous session (e.g. the previous aircraft). Start over from a fresh map
+    // with the sensor at the origin (gravity from the accelerometer, see RestartAtOrigin).
+    p_imu_->RestartAtOrigin(kf_);
+    state_point_ = kf_.get_x();
 
     ivox_ = std::make_shared<IVoxType>(ivox_options_);
     flg_first_scan_ = true;

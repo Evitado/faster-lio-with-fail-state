@@ -4,6 +4,9 @@
 #include <gtest/gtest.h>
 #include <Eigen/Geometry>
 
+#include <algorithm>
+#include <cmath>
+#include <limits>
 #include <vector>
 
 namespace faster_lio {
@@ -236,6 +239,104 @@ TEST(ImuProcess, ExtrinsicIsApplied) {
         << out->front().pos().transpose() << " vs " << expected.transpose();
     EXPECT_GT((out->front().pos() - without.out->front().pos()).norm(), 0.05f);
     EXPECT_TRUE(out->back().pos().isApprox(points.back().pos(), 1e-6f));
+}
+
+double AngleDeg(const V3D &a, const V3D &b) { return std::acos(std::clamp(a.normalized().dot(b.normalized()), -1.0, 1.0)) * 180 / M_PI; }
+
+V3D Grav(const KF &kf) { return kf.get_x().grav.get_vect(); }
+
+TEST(ImuProcess, RestartPutsTheSensorAtTheOriginAndKeepsBiases) {
+    const double w = 0.5;
+    Fixture f(kStaticAcc, kGyrBias + V3D(0, 0, w));
+    for (int i = 0; i < 5; ++i) {
+        ASSERT_TRUE(f.imu.Process(Scan(kT0 + i * kScan, kStaticAcc, kGyrBias + V3D(0, 0, w)), f.kf, f.out));
+    }
+    const state_ikfom before = f.kf.get_x();
+    ASSERT_GT(Eigen::AngleAxisd(before.rot).angle(), 0.2);
+
+    f.imu.RestartAtOrigin(f.kf);
+    const state_ikfom &s = f.kf.get_x();
+    EXPECT_TRUE(s.rot.toRotationMatrix().isApprox(M3D::Identity()));
+    EXPECT_EQ(s.pos, V3D::Zero());
+    EXPECT_EQ(s.vel, V3D::Zero());
+    EXPECT_TRUE(s.bg == before.bg);
+    EXPECT_TRUE(s.ba == before.ba);
+    EXPECT_TRUE(s.offset_T_L_I == before.offset_T_L_I);
+    EXPECT_NEAR(Grav(f.kf).norm(), 9.809, 1e-9);
+    EXPECT_LT(AngleDeg(Grav(f.kf), -kStaticAcc), 1e-6);
+
+    // initial covariance, except for gravity
+    KF expected;
+    ImuProcess::SetInitialCovariance(expected);
+    auto P = f.kf.get_P();
+    EXPECT_EQ(P(21, 21), RESTART_GRAVITY_VAR);
+    EXPECT_EQ(P(22, 22), RESTART_GRAVITY_VAR);
+    P(21, 21) = P(22, 22) = expected.get_P()(21, 21);
+    EXPECT_TRUE(P == expected.get_P());
+
+    // and runs on from there
+    EXPECT_TRUE(f.imu.Process(Scan(kT0 + 5 * kScan, kStaticAcc, kGyrBias), f.kf, f.out));
+    EXPECT_LT(f.kf.get_x().pos.norm(), 1e-3);
+}
+
+TEST(ImuProcess, RestartTakesGravityFromTheAccelerometerNotTheDriftedAttitude) {
+    // the gyro reads a roll rate the accelerometer does not see (a bias error): integrated without lidar
+    // corrections for 2 s the attitude tilts by ~5.7 deg, and the gravity it implies in the sensor frame with it
+    const V3D gyr = kGyrBias + V3D(0.05, 0, 0);
+    Fixture f(kStaticAcc, gyr);
+    for (int i = 0; i < 20; ++i) {
+        ASSERT_TRUE(f.imu.Process(Scan(kT0 + i * kScan, kStaticAcc, gyr), f.kf, f.out));
+    }
+    const state_ikfom before = f.kf.get_x();
+    const V3D gyro_gravity = before.rot.conjugate() * before.grav.get_vect();
+    ASSERT_GT(AngleDeg(gyro_gravity, -kStaticAcc), 5.0);
+
+    f.imu.RestartAtOrigin(f.kf);
+    EXPECT_LT(AngleDeg(Grav(f.kf), -kStaticAcc), 1e-3);
+}
+
+TEST(ImuProcess, RestartAveragesTheAccelerometer) {
+    // vibration on top of gravity: +-1 m/s^2 alternating on x averages out
+    Fixture f;
+    for (int i = 0; i < 20; ++i) {
+        common::MeasureGroup meas = Scan(kT0 + i * kScan, kStaticAcc, kGyrBias);
+        for (size_t k = 0; k < meas.imu_.size(); ++k) {
+            meas.imu_[k] = Imu(meas.imu_[k]->header.stamp.toSec(), kStaticAcc + V3D(k % 2 ? 1.0 : -1.0, 0, 0), kGyrBias);
+        }
+        ASSERT_TRUE(f.imu.Process(meas, f.kf, f.out));
+    }
+    f.imu.RestartAtOrigin(f.kf);
+    EXPECT_LT(AngleDeg(Grav(f.kf), -kStaticAcc), 0.1);  // one sample alone would be 5.8 deg off
+}
+
+TEST(ImuProcess, RestartReinitializesANonFiniteFilter) {
+    Fixture f;
+    state_ikfom s = f.kf.get_x();
+    s.vel = V3D(std::numeric_limits<double>::quiet_NaN(), 0, 0);
+    s.bg = V3D::Constant(std::numeric_limits<double>::quiet_NaN());
+    f.kf.change_x(s);
+
+    f.imu.RestartAtOrigin(f.kf);
+    // the IMU init runs again on the next samples, as at startup: the first scan goes into it
+    EXPECT_FALSE(f.imu.Process(Scan(kT0, kStaticAcc, kGyrBias), f.kf, f.out));
+    EXPECT_TRUE(f.imu.Process(Scan(kT0 + kScan, kStaticAcc, kGyrBias), f.kf, f.out));
+
+    const state_ikfom &r = f.kf.get_x();
+    EXPECT_TRUE(r.pos.allFinite() && r.vel.allFinite() && r.rot.coeffs().allFinite());
+    EXPECT_TRUE(r.bg.isApprox(kGyrBias, 1e-6));
+    EXPECT_LT(r.vel.norm(), 1e-2);
+    EXPECT_LT(AngleDeg(Grav(f.kf), -kStaticAcc), 1e-6);
+    EXPECT_TRUE(f.kf.get_P().allFinite());
+}
+
+TEST(ImuProcess, RestartBeforeTheInitIsANoOp) {
+    ImuProcess imu;
+    KF kf;
+    InitFilter(kf);
+    const auto P = kf.get_P();
+    imu.RestartAtOrigin(kf);
+    EXPECT_TRUE(kf.get_P() == P);
+    EXPECT_EQ(kf.get_x().pos, V3D::Zero());
 }
 
 }  // namespace

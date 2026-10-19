@@ -15,6 +15,10 @@
 namespace faster_lio {
 
 constexpr int MAX_INI_COUNT = 20;
+constexpr double ACC_LOWPASS_TAU = 1.0;  // [s] time constant of the accelerometer average gravity is restarted from
+// gravity variance [rad^2] after RestartAtOrigin, (2 deg)^2: the accelerometer average also holds the vehicle's own
+// acceleration (0.3 m/s^2 is ~1.8 deg), the new session has to be able to correct that
+constexpr double RESTART_GRAVITY_VAR = 1.2e-3;
 
 bool time_list(const PointType &x, const PointType &y) { return (x.time < y.time); };
 
@@ -36,6 +40,14 @@ class ImuProcess {
     /// covariance the filter starts from after the IMU init
     static void SetInitialCovariance(esekfom::esekf<state_ikfom, 12, input_ikfom> &kf_state);
 
+    /**
+     * Starts a new odometry session: the sensor at the origin, at rest, biases and extrinsic kept. Gravity comes from
+     * the recent accelerometer average rather than from the attitude, which was integrated from the gyro alone while
+     * there were no lidar corrections, and gets a variance the new session can correct. A diverged (non-finite)
+     * filter is re-initialized from the IMU instead, as at startup.
+     */
+    void RestartAtOrigin(esekfom::esekf<state_ikfom, 12, input_ikfom> &kf_state);
+
     Eigen::Matrix<double, 12, 12> Q_;
     common::V3D cov_acc_;
     common::V3D cov_gyr_;
@@ -48,6 +60,7 @@ class ImuProcess {
     void IMUInit(const common::MeasureGroup &meas, esekfom::esekf<state_ikfom, 12, input_ikfom> &kf_state, int &N);
     void UndistortPcl(const common::MeasureGroup &meas, esekfom::esekf<state_ikfom, 12, input_ikfom> &kf_state,
                       PointCloudType &pcl_out);
+    void UpdateAccLowpass(const common::MeasureGroup &meas);
 
     sensor_msgs::ImuConstPtr last_imu_;
     std::deque<sensor_msgs::ImuConstPtr> v_imu_;
@@ -62,6 +75,8 @@ class ImuProcess {
     int init_iter_num_ = 1;
     bool b_first_frame_ = true;
     bool imu_need_init_ = true;
+    common::V3D acc_lowpass_ = common::Zero3d;  // accelerometer average over ~ACC_LOWPASS_TAU, raw units
+    double acc_lowpass_time_ = -1;               // stamp of the last sample in acc_lowpass_, < 0: none yet
 };
 
 ImuProcess::ImuProcess() : b_first_frame_(true), imu_need_init_(true) {
@@ -157,6 +172,56 @@ void ImuProcess::SetInitialCovariance(esekfom::esekf<state_ikfom, 12, input_ikfo
     init_P(18, 18) = init_P(19, 19) = init_P(20, 20) = 0.001;
     init_P(21, 21) = init_P(22, 22) = 0.00001;
     kf_state.change_P(init_P);
+}
+
+void ImuProcess::UpdateAccLowpass(const common::MeasureGroup &meas) {
+    for (const auto &imu : meas.imu_) {
+        const double t = imu->header.stamp.toSec();
+        const common::V3D acc(imu->linear_acceleration.x, imu->linear_acceleration.y, imu->linear_acceleration.z);
+        if (!acc.allFinite() || t <= acc_lowpass_time_) {
+            continue;
+        }
+        if (acc_lowpass_time_ < 0) {
+            acc_lowpass_ = acc;
+        } else {
+            acc_lowpass_ += (1.0 - std::exp(-(t - acc_lowpass_time_) / ACC_LOWPASS_TAU)) * (acc - acc_lowpass_);
+        }
+        acc_lowpass_time_ = t;
+    }
+}
+
+void ImuProcess::RestartAtOrigin(esekfom::esekf<state_ikfom, 12, input_ikfom> &kf_state) {
+    if (imu_need_init_) {
+        return;  // the IMU init still has to run, and sets up the state
+    }
+    state_ikfom s = kf_state.get_x();
+    const bool finite = s.pos.allFinite() && s.vel.allFinite() && s.rot.coeffs().allFinite() &&
+                        s.bg.allFinite() && s.ba.allFinite() && s.grav.get_vect().allFinite() &&
+                        s.offset_R_L_I.coeffs().allFinite() && s.offset_T_L_I.allFinite() &&
+                        kf_state.get_P().allFinite();
+    if (!finite) {
+        ROS_WARN("filter state is not finite, re-initializing from the IMU");
+        Reset();
+        state_ikfom fresh;
+        kf_state.change_x(fresh);
+        SetInitialCovariance(kf_state);
+        return;
+    }
+
+    if (acc_lowpass_time_ >= 0 && acc_lowpass_.norm() > 0.1 * mean_acc_.norm()) {
+        s.grav = S2(-acc_lowpass_);  // specific force at rest points up; S2 keeps its own length
+    } else {
+        s.grav = S2(s.rot.conjugate() * s.grav.get_vect());  // no accelerometer average: re-express the old one
+    }
+    s.rot = Eigen::Quaterniond::Identity();
+    s.pos.setZero();
+    s.vel.setZero();
+    kf_state.change_x(s);
+
+    SetInitialCovariance(kf_state);
+    esekfom::esekf<state_ikfom, 12, input_ikfom>::cov P = kf_state.get_P();
+    P(21, 21) = P(22, 22) = RESTART_GRAVITY_VAR;
+    kf_state.change_P(P);
 }
 
 void ImuProcess::UndistortPcl(const common::MeasureGroup &meas, esekfom::esekf<state_ikfom, 12, input_ikfom> &kf_state,
@@ -315,6 +380,7 @@ void ImuProcess::UndistortPcl(const common::MeasureGroup &meas, esekfom::esekf<s
 bool ImuProcess::Process(const common::MeasureGroup &meas, esekfom::esekf<state_ikfom, 12, input_ikfom> &kf_state,
                          CloudPtr cur_pcl_un_) {
     PROFILE_SCOPE("imu process");
+    UpdateAccLowpass(meas);
     if (meas.imu_.empty()) {
         return false;
     }
