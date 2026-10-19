@@ -4,6 +4,7 @@
 #include <boost/make_shared.hpp>
 
 #include <cstring>
+#include <limits>
 #include <string>
 #include <vector>
 
@@ -104,6 +105,18 @@ TEST(PointCloudPreprocess, BlindDropsClosePoints) {
     EXPECT_EQ(out[0].pos(), Eigen::Vector3f(0, 1.0f, 0));
     EXPECT_EQ(out[1].pos(), Eigen::Vector3f(0, 0, -1.5f));
     EXPECT_EQ(out[2].pos(), Eigen::Vector3f(0.6f, 0.6f, 0.6f));
+}
+
+TEST(PointCloudPreprocess, DropsNonFinitePoints) {
+    const float nan = std::numeric_limits<float>::quiet_NaN();
+    const float inf = std::numeric_limits<float>::infinity();
+    const auto msg = MakeCloud({In(nan, nan, nan), In(1, 2, 3), In(0, inf, 0), In(nan, 0, 0), In(4, 5, -inf), In(6, 0, 0)}, 6, 1);
+    for (const double blind : {0.0, 0.5}) {
+        const PointCloudType out = Preprocess(msg, blind);
+        ASSERT_EQ(out.size(), 2u) << "blind " << blind;
+        EXPECT_EQ(out[0].pos(), Eigen::Vector3f(1, 2, 3));
+        EXPECT_EQ(out[1].pos(), Eigen::Vector3f(6, 0, 0));
+    }
 }
 
 TEST(PointCloudPreprocess, PointFilterNumKeepsEveryNthRowMajorPoint) {

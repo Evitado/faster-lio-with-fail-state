@@ -2,6 +2,7 @@
 #include "profiling.h"
 
 #include <ros/console.h>
+#include <cmath>
 #include <cstring>
 
 namespace faster_lio {
@@ -78,8 +79,8 @@ void PointCloudPreprocess::Ouster128Handler(const sensor_msgs::PointCloud2::Cons
         const float y = ReadField<float>(point, off_y);
         const float z = ReadField<float>(point, off_z);
 
-        double range = x * x + y * y + z * z;
-        if (range < blind2) continue;
+        const double range = double(x) * x + double(y) * y + double(z) * z;
+        if (!std::isfinite(range) || range < blind2) continue;  // also NaN / inf points: no position
 
         PointType added_pt;
         added_pt.x = x;
