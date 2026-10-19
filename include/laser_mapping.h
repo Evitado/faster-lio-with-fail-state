@@ -66,6 +66,8 @@ class LaserMapping {
 
     /// per-scan profiler plots and frame mark (no-op unless built with FASTER_LIO_TRACY)
     void ProfileScan();
+    /// odometry (IMU prediction) and keypoints for a scan with too few points to update the filter
+    void PublishSkippedScan();
 
     void SubAndPubToROS();
 

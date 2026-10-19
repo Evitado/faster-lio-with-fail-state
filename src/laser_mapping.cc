@@ -227,12 +227,11 @@ void LaserMapping::ProcessScan() {
     obs_model_calls_ = 0;
 
     /// IMU process, kf prediction, undistortion
-    p_imu_->Process(measures_, kf_, scan_undistort_);
-    if (scan_undistort_->empty() || (scan_undistort_ == nullptr)) {
-        ROS_WARN_STREAM("No point, skip this scan!");
-        return;
+    if (!p_imu_->Process(measures_, kf_, scan_undistort_)) {
+        return;  // no IMU data for this scan or the IMU is still initializing: scan_undistort_ is not this scan
     }
 
+    // also for an empty scan, so fail_state keeps getting messages and can tell when to restart the LIO
     if (!lidar_odom_) {
         VoxelDownsample(*scan_undistort_, filter_size_surf_, *scan_down_body_);
         scan_down_world_->clear();
@@ -246,6 +245,13 @@ void LaserMapping::ProcessScan() {
         PublishPath(pub_path_);
         flg_first_scan_ = true;
         ProfileScan();
+        return;
+    }
+
+    if (scan_undistort_->empty()) {
+        ROS_WARN_STREAM("No point, skip this scan!");
+        scan_down_body_->clear();
+        PublishSkippedScan();
         return;
     }
 
@@ -276,6 +282,7 @@ void LaserMapping::ProcessScan() {
     if (cur_pts < 5) {
         // skip only this scan: the IMU prediction carries the state to the next one, odometry keeps running
         ROS_WARN_STREAM("Too few points, skip this scan!" << scan_undistort_->size() << ", " << scan_down_body_->size());
+        PublishSkippedScan();
         return;
     }
     scan_down_world_->resize(cur_pts);
@@ -317,6 +324,21 @@ void LaserMapping::ProcessScan() {
             PublishFrameBody(pub_laser_cloud_body_);
         }
     }
+    ProfileScan();
+}
+
+void LaserMapping::PublishSkippedScan() {
+    // Without enough points there is no filter update, but odometry and TF keep going with the IMU prediction and
+    // the keypoints carry the few points there are: odometry_fail_state sees the too-small cloud and stops the LIO
+    // after enough of them in a row, rather than getting no messages and never firing.
+    state_point_ = kf_.get_x();
+    scan_down_world_->clear();
+    scan_down_world_->reserve(scan_down_body_->size());
+    for (const auto &point : *scan_down_body_) {
+        scan_down_world_->push_back(PointBodyToWorld(point));
+    }
+    PublishKeypoints(keypoints_pub_);
+    PublishOdometry(pub_odom_aft_mapped_);
     ProfileScan();
 }
 

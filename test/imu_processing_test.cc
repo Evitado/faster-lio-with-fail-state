@@ -90,7 +90,7 @@ TEST(ImuProcess, InitEstimatesGravityAndGyroBias) {
         init.imu_.push_back(Imu(10 + i * kImuDt, V3D(0.3, -0.2, 9.7), kGyrBias));
     }
     CloudPtr out = std::make_shared<PointCloudType>(1, Pt(1, 2, 3, 0));
-    imu.Process(init, kf, out);
+    EXPECT_FALSE(imu.Process(init, kf, out));  // the init scan is not undistorted
 
     const state_ikfom &s = kf.get_x();
     const V3D grav(s.grav[0], s.grav[1], s.grav[2]);
@@ -123,7 +123,7 @@ TEST(ImuProcess, InitNeedsEnoughSamples) {
 
     // still initializing: the scan's points are not undistorted into the output
     *few.lidar_ = {Pt(1, 0, 0, 50)};
-    imu.Process(few, kf, out);
+    EXPECT_FALSE(imu.Process(few, kf, out));
     EXPECT_TRUE(out->empty());
 }
 
@@ -133,7 +133,7 @@ TEST(ImuProcess, NoImuIsANoOp) {
     common::MeasureGroup meas;
     *meas.lidar_ = {Pt(1, 2, 3, 10)};
     *f.out = {Pt(9, 9, 9, 0)};
-    f.imu.Process(meas, f.kf, f.out);
+    EXPECT_FALSE(f.imu.Process(meas, f.kf, f.out));
     ASSERT_EQ(f.out->size(), 1u);
     EXPECT_EQ(f.out->front().pos(), Eigen::Vector3f(9, 9, 9));
     EXPECT_TRUE(f.kf.get_x().pos == before.pos);
@@ -144,7 +144,7 @@ TEST(ImuProcess, StaticScanIsUnchangedAndSortedByTime) {
     // out of time order, two points share a time stamp
     const PointCloudType points{Pt(1, 2, 3, 80, 1), Pt(-4, 5, 6, 10, 2), Pt(7, -8, 9, 50, 3), Pt(0, 1, 2, 10, 4),
                                 Pt(3, 3, 3, 100, 5)};
-    f.imu.Process(Scan(kT0, kStaticAcc, kGyrBias, points), f.kf, f.out);
+    EXPECT_TRUE(f.imu.Process(Scan(kT0, kStaticAcc, kGyrBias, points), f.kf, f.out));
 
     ASSERT_EQ(f.out->size(), points.size());
     const float expected_intensity[] = {2, 4, 3, 1, 5};  // stable sort by time

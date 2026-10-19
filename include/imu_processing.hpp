@@ -29,7 +29,9 @@ class ImuProcess {
     void SetAccCov(const common::V3D &scaler);
     void SetGyrBiasCov(const common::V3D &b_g);
     void SetAccBiasCov(const common::V3D &b_a);
-    void Process(const common::MeasureGroup &meas, esekfom::esekf<state_ikfom, 12, input_ikfom> &kf_state,
+    /// propagates the filter over the scan and undistorts its points into pcl_un_; returns false, leaving pcl_un_
+    /// as it is, when there is no IMU data or the IMU is still initializing
+    bool Process(const common::MeasureGroup &meas, esekfom::esekf<state_ikfom, 12, input_ikfom> &kf_state,
                  CloudPtr pcl_un_);
     /// covariance the filter starts from after the IMU init
     static void SetInitialCovariance(esekfom::esekf<state_ikfom, 12, input_ikfom> &kf_state);
@@ -310,11 +312,11 @@ void ImuProcess::UndistortPcl(const common::MeasureGroup &meas, esekfom::esekf<s
     }
 }
 
-void ImuProcess::Process(const common::MeasureGroup &meas, esekfom::esekf<state_ikfom, 12, input_ikfom> &kf_state,
+bool ImuProcess::Process(const common::MeasureGroup &meas, esekfom::esekf<state_ikfom, 12, input_ikfom> &kf_state,
                          CloudPtr cur_pcl_un_) {
     PROFILE_SCOPE("imu process");
     if (meas.imu_.empty()) {
-        return;
+        return false;
     }
 
     ROS_ASSERT(meas.lidar_ != nullptr);
@@ -337,10 +339,11 @@ void ImuProcess::Process(const common::MeasureGroup &meas, esekfom::esekf<state_
             ROS_INFO_STREAM("IMU Initial Done");
         }
 
-        return;
+        return false;
     }
 
     UndistortPcl(meas, kf_state, *cur_pcl_un_);
+    return true;
 }
 }  // namespace faster_lio
 
