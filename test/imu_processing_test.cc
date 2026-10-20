@@ -309,23 +309,30 @@ TEST(ImuProcess, RestartAveragesTheAccelerometer) {
     EXPECT_LT(AngleDeg(Grav(f.kf), -kStaticAcc), 0.1);  // one sample alone would be 5.8 deg off
 }
 
-TEST(ImuProcess, RestartReinitializesANonFiniteFilter) {
+TEST(ImuProcess, RestartRecoversANonFiniteFilterWithTheStartupBiases) {
     Fixture f;
     state_ikfom s = f.kf.get_x();
     s.vel = V3D(std::numeric_limits<double>::quiet_NaN(), 0, 0);
     s.bg = V3D::Constant(std::numeric_limits<double>::quiet_NaN());
+    s.ba = V3D::Constant(std::numeric_limits<double>::quiet_NaN());
     f.kf.change_x(s);
 
+    // restarted from the startup IMU init at once, without re-running it
     f.imu.RestartAtOrigin(f.kf);
-    // the IMU init runs again on the next samples, as at startup: the first scan goes into it
-    EXPECT_FALSE(f.imu.Process(Scan(kT0, kStaticAcc, kGyrBias), f.kf, f.out));
-    EXPECT_TRUE(f.imu.Process(Scan(kT0 + kScan, kStaticAcc, kGyrBias), f.kf, f.out));
-
     const state_ikfom &r = f.kf.get_x();
-    EXPECT_TRUE(r.pos.allFinite() && r.vel.allFinite() && r.rot.coeffs().allFinite());
+    EXPECT_EQ(r.pos, V3D::Zero());
+    EXPECT_EQ(r.vel, V3D::Zero());
+    EXPECT_TRUE(r.rot.isApprox(Eigen::Quaterniond::Identity()));
     EXPECT_TRUE(r.bg.isApprox(kGyrBias, 1e-6));
-    EXPECT_LT(r.vel.norm(), 1e-2);
+    EXPECT_EQ(r.ba, V3D::Zero());
     EXPECT_LT(AngleDeg(Grav(f.kf), -kStaticAcc), 1e-6);
+    EXPECT_TRUE(f.kf.get_P().allFinite());
+
+    // so the very next scan is undistorted and published, and the prediction stays at rest
+    EXPECT_TRUE(f.imu.Process(Scan(kT0, kStaticAcc, kGyrBias), f.kf, f.out));
+    const state_ikfom &n = f.kf.get_x();
+    EXPECT_TRUE(n.pos.allFinite() && n.vel.allFinite() && n.rot.coeffs().allFinite());
+    EXPECT_LT(n.vel.norm(), 1e-2);
     EXPECT_TRUE(f.kf.get_P().allFinite());
 }
 

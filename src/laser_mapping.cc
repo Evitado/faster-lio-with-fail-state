@@ -16,8 +16,6 @@ namespace {
 constexpr double INIT_TIME = 0.1;          // seconds after the first scan before points are added selectively
 constexpr double LASER_POINT_COV = 0.001;  // measurement covariance of a point-to-plane residual
 constexpr int NUM_MATCH_POINTS = 5;        // nearest map points searched per scan point
-// scans without enough points for this long in a row [s] stop the odometry: past it the IMU-only prediction drifts
-constexpr double MAX_SKIPPED_SCAN_TIME = 0.5;
 }  // namespace
 
 bool LaserMapping::InitROS(const ros::NodeHandle &nh, const ros::NodeHandle &pnh) {
@@ -76,6 +74,8 @@ bool LaserMapping::LoadParams() {
     nh_.param<float>("ivox_grid_resolution", ivox_options_.resolution_, 0.2);
     nh_.param<int>("ivox_nearby_type", ivox_nearby_type, 18);
     nh_.param<float>("nn_reuse_distance", nn_reuse_distance_, nn_reuse_distance_);
+    // skipped scans for this long in a row stop the odometry: past it the IMU-only prediction drifts
+    nh_.param<double>("max_skipped_scan_time", max_skipped_scan_time_, max_skipped_scan_time_);
     int ivox_capacity = static_cast<int>(ivox_options_.capacity_);
     nh_.param<int>("ivox_capacity", ivox_capacity, ivox_capacity);  // max voxels kept, least recently used dropped
     ivox_options_.capacity_ = static_cast<std::size_t>(std::max(ivox_capacity, 1));
@@ -218,23 +218,19 @@ void LaserMapping::Run() {
 void LaserMapping::ProcessScan() {
     PROFILE_SCOPE("LaserMapping::ProcessScan");
     obs_model_calls_ = 0;
+    obs_model_valid_ = 0;
 
     /// IMU process, kf prediction, undistortion
     if (!p_imu_->Process(measures_, kf_, scan_undistort_)) {
         return;  // no IMU data for this scan or the IMU is still initializing: scan_undistort_ is not this scan
     }
 
+    if (lidar_odom_ && !IsFinite(kf_)) {
+        StopDivergedOdometry();
+    }
     // also for an empty scan, so fail_state keeps getting messages and can tell when to restart the LIO
     if (!lidar_odom_) {
-        VoxelDownsample(*scan_undistort_, filter_size_surf_, *scan_down_body_);
-        ScanDownBodyToWorld();
-
-        PublishOdometry(pub_odom_aft_mapped_);
-        PublishKeypoints(keypoints_pub_);
-        path_.poses.clear();
-        PublishPath(pub_path_);
-        flg_first_scan_ = true;
-        ProfileScan();
+        PublishStoppedScan();
         return;
     }
 
@@ -305,6 +301,17 @@ void LaserMapping::ProcessScan() {
         // save the state
         state_point_ = kf_.get_x();
     }
+    if (!IsFinite(kf_)) {
+        StopDivergedOdometry();
+        PublishStoppedScan();
+        return;
+    }
+    if (obs_model_valid_ == 0) {
+        // no correspondence in any iteration, so no filter update: the pose is the IMU prediction, which must
+        // neither go into the map nor reset the skipped-scan timer
+        PublishSkippedScan();
+        return;
+    }
 
     // update local map
     {
@@ -329,21 +336,47 @@ void LaserMapping::ProcessScan() {
     ProfileScan();
 }
 
+void LaserMapping::PublishStoppedScan() {
+    VoxelDownsample(*scan_undistort_, filter_size_surf_, *scan_down_body_);
+    ScanDownBodyToWorld();
+
+    PublishOdometry(pub_odom_aft_mapped_);
+    PublishKeypoints(keypoints_pub_);
+    path_.poses.clear();
+    PublishPath(pub_path_);
+    flg_first_scan_ = true;
+    ProfileScan();
+}
+
+void LaserMapping::StopOdometry() {
+    lidar_odom_ = false;
+    first_skipped_scan_time_ = -1;
+    path_.poses.clear();
+}
+
+void LaserMapping::StopDivergedOdometry() {
+    // Detected before anything is published or added to the map, so no NaN pose reaches odometry, TF or the map.
+    // The keypoints of the stopped scans need a finite pose, and start_lidar_odom restarts from here anyway.
+    // Nothing restarts it by itself yet: fail_state only restarts after a failure it saw (README, "Known gap").
+    ROS_ERROR("filter state is not finite, lidar odometry stopped (start_lidar_odom restarts it)");
+    StopOdometry();
+    p_imu_->RestartAtOrigin(kf_);
+    state_point_ = kf_.get_x();
+}
+
 void LaserMapping::PublishSkippedScan() {
-    // Without enough points there is no filter update, but odometry and TF keep going with the IMU prediction and
-    // the keypoints carry the few points there are, so odometry_fail_state sees the too-small cloud. Past
-    // MAX_SKIPPED_SCAN_TIME of such scans the odometry stops itself, as main did: fail_state may already be in its
+    // Without enough points, or without any point-to-plane correspondence, there is no filter update, but odometry
+    // and TF keep going with the IMU prediction and the keypoints carry the few points there are, so
+    // odometry_fail_state sees the too-small cloud. Past max_skipped_scan_time_ of such scans the odometry stops itself, as main did: fail_state may already be in its
     // fail state (it only acts on a change) when something else starts the LIO, which would then coast on the IMU
     // and publish its drift as live odometry. Stopped, it publishes as such until start_lidar_odom.
     if (first_skipped_scan_time_ < 0) {
         first_skipped_scan_time_ = measures_.lidar_bag_time_;
     }
-    if (measures_.lidar_bag_time_ - first_skipped_scan_time_ >= MAX_SKIPPED_SCAN_TIME) {
+    if (measures_.lidar_bag_time_ - first_skipped_scan_time_ >= max_skipped_scan_time_) {
         ROS_WARN("no usable lidar points for %.1f s, lidar odometry stopped (start_lidar_odom restarts it)",
                  measures_.lidar_bag_time_ - first_skipped_scan_time_);
-        lidar_odom_ = false;
-        first_skipped_scan_time_ = -1;
-        path_.poses.clear();
+        StopOdometry();
     }
     state_point_ = kf_.get_x();
     ScanDownBodyToWorld();
@@ -614,9 +647,10 @@ void LaserMapping::ObsModel(state_ikfom &s, esekfom::dyn_share_datastruct<double
     if (effect_feat_num_ < 1) {
         ekfom_data.valid = false;
         ekfom_data.has_HTH = false;
-        ROS_WARN_STREAM("No Effective Points!");
+        ROS_WARN_THROTTLE(1.0, "No Effective Points!");
         return;
     }
+    ++obs_model_valid_;
 
     /*** Measurement Jacobian H (one 1x12 row per point) and measurements h, accumulated straight into
      *   H^T H and H^T h. The filter only needs the full H when it has fewer rows than states. ***/

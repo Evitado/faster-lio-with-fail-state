@@ -26,6 +26,29 @@ starts `run_mapping_online` as `lidar_odometry`.
   rosservice call /lidar_odometry/save_trajectory "file_path: '/tmp/run.tum'"
   ```
 
+### Self-stop and restart
+
+The odometry stops itself, and then publishes as stopped until `start_lidar_odom`, in two cases:
+
+- `max_skipped_scan_time` (0.5 s) of scans in a row without a filter update: too few points, or no point-to-plane
+  correspondence.
+- The filter diverged (non-finite state or covariance). It is caught before anything is published, and the filter is
+  reset to the origin with the startup IMU biases, so the stopped keypoints stay finite.
+
+**Known gap:** faster_lio never restarts itself; `odometry_fail_state` (`evitado_vdb_mapping`) has to call
+`start_lidar_odom`. A self-restart would skip what fail_state does around it: resetting aircraft_state_estimation and
+restarting ohm_mapping for the new odom origin. But fail_state only restarts LIO after it saw a failure itself: 10
+failing frames in a row (`sensor_frequency`), checked in fixed blocks of 10, so ~1-2 s. While LIO is stopped its
+odometry is identity, which fail_state takes as a standing tug, and it clears its buffer. So LIO stays stopped,
+until something else calls `start_lidar_odom`, after:
+
+- a blinding that lasts longer than `max_skipped_scan_time` but too short for fail_state to see (up to ~2 s);
+- a divergence while the lidar is healthy: fail_state never sees a failure.
+
+Both are rare. The fix belongs in fail_state: when the odometry reports stopped (`child_frame_id` is
+`base_link_frame`) and the lidar is healthy, run its normal stop/start sequence. Raising `max_skipped_scan_time` above
+~2 s also closes the first case, at the cost of publishing up to that long of IMU-only drift as live odometry.
+
 ## Profiling
 
 Set `profiling_enable:=true` (or `FASTER_LIO_PROFILING=true`) to record a Tracy trace into `profiling_save_path`

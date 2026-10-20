@@ -22,6 +22,14 @@ constexpr double RESTART_GRAVITY_VAR = 1.2e-3;
 
 bool time_list(const PointType &x, const PointType &y) { return (x.time < y.time); };
 
+/// whether the filter state and covariance are all finite: a diverged filter goes NaN
+inline bool IsFinite(const esekfom::esekf<state_ikfom, 12, input_ikfom> &kf) {
+    const state_ikfom &s = kf.get_x();
+    return s.pos.allFinite() && s.vel.allFinite() && s.rot.coeffs().allFinite() && s.bg.allFinite() &&
+           s.ba.allFinite() && s.grav.get_vect().allFinite() && s.offset_R_L_I.coeffs().allFinite() &&
+           s.offset_T_L_I.allFinite() && kf.get_P().allFinite();
+}
+
 /// IMU Process and undistortion
 class ImuProcess {
    public:
@@ -44,7 +52,8 @@ class ImuProcess {
      * Starts a new odometry session: the sensor at the origin, at rest, biases and extrinsic kept. Gravity comes from
      * the recent accelerometer average rather than from the attitude, which was integrated from the gyro alone while
      * there were no lidar corrections, and gets a variance the new session can correct. A diverged (non-finite)
-     * filter is re-initialized from the IMU instead, as at startup.
+     * filter restarts from what the startup IMU init estimated (gyro bias, accelerometer scale, zero acc bias)
+     * without re-running the init, so no scans go unpublished while the vehicle may be moving.
      */
     void RestartAtOrigin(esekfom::esekf<state_ikfom, 12, input_ikfom> &kf_state);
 
@@ -195,11 +204,7 @@ void ImuProcess::RestartAtOrigin(esekfom::esekf<state_ikfom, 12, input_ikfom> &k
         return;  // the IMU init still has to run, and sets up the state
     }
     state_ikfom s = kf_state.get_x();
-    const bool finite = s.pos.allFinite() && s.vel.allFinite() && s.rot.coeffs().allFinite() &&
-                        s.bg.allFinite() && s.ba.allFinite() && s.grav.get_vect().allFinite() &&
-                        s.offset_R_L_I.coeffs().allFinite() && s.offset_T_L_I.allFinite() &&
-                        kf_state.get_P().allFinite();
-    if (!finite) {
+    if (!IsFinite(kf_state)) {
         // Start over from what the startup IMU init estimated (gyro bias, and mean_acc_ that scales the
         // accelerometer) instead of re-running the init, which would publish nothing for MAX_INI_COUNT scans
         ROS_WARN("filter state is not finite, restarting with the startup IMU biases");

@@ -71,6 +71,12 @@ class LaserMapping {
     /// odometry (IMU prediction) and keypoints for a scan with too few points to update the filter; stops the
     /// odometry once such scans went on for too long
     void PublishSkippedScan();
+    /// keypoints and the stopped odometry while the odometry is stopped
+    void PublishStoppedScan();
+    /// stop the odometry (as stop_lidar_odom does) when it can no longer be trusted
+    void StopOdometry();
+    /// stop a diverged (non-finite) filter: nothing non-finite is published, and the filter restarts at the origin
+    void StopDivergedOdometry();
 
     void SubAndPubToROS();
 
@@ -152,6 +158,8 @@ class LaserMapping {
     int scan_num_ = 0;
     int effect_feat_num_ = 0;
     int obs_model_calls_ = 0;  // IEKF iterations of the current scan
+    int obs_model_valid_ = 0;  // of those, the ones with point-to-plane correspondences, i.e. a filter update
+    double max_skipped_scan_time_ = 0.5;  // skipped scans for this long in a row stop the odometry [s]
 
     ///////////////////////// EKF inputs and output ///////////////////////////////////////////////////////
     common::MeasureGroup measures_;                    // sync IMU and lidar scan

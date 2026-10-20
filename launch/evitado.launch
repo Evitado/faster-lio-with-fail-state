@@ -22,6 +22,9 @@
          neighbours, so it is not bit-identical: on the 737-900ER bag it differs from 0 by 2.9 mm mean APE, the same
          as two runs with 0 (2.6 mm), and makes the IEKF update ~1.6x faster. -->
     <param name="nn_reuse_distance" type="double" value="0.01" />
+    <!-- scans without a filter update (too few points, no correspondences) for this long in a row [s] stop the
+         odometry until start_lidar_odom; past it the IMU-only prediction drifts -->
+    <param name="max_skipped_scan_time" type="double" value="0.5" />
     <node pkg="faster_lio" type="run_mapping_online" name="lidar_odometry" output="screen"> 
       <param name="base_link_frame" value="$(arg base_link_frame)" />
       <param name="lidar_frame" value="$(arg lidar_frame)" />
