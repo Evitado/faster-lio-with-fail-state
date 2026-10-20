@@ -4,23 +4,25 @@
   buildRosPackage,
   catkin,
   eigen,
-  eigen-conversions,
   geometry-msgs,
-  glog,
   message-generation,
   message-runtime,
   nav-msgs,
-  pcl-ros,
-  rosbag,
   roscpp,
-  rospy,
-  rostest,
   sensor-msgs,
   std-msgs,
+  std-srvs,
   tbb_2022_0,
   tf,
-  yaml-cpp,
+  # workspace flake's locked nixpkgs-unstable (unstableOverlay); without it tracy-tools.nix uses the same pinned rev
+  unstable ? null,
 }:
+let
+  # recorder started by ~profiling_enable, built from the same Tracy commit as the client compiled in below
+  tracyCapture = import ./profiling/tracy-tools.nix (
+    { captureOnly = true; } // lib.optionalAttrs (unstable != null) { pkgs = unstable; }
+  );
+in
 buildRosPackage rec {
   pname = "ros-noetic-faster-lio";
   version = "0.0.0";
@@ -33,26 +35,24 @@ buildRosPackage rec {
     message-generation
     tbb_2022_0
   ];
-  checkInputs = [
-    rosbag
-    rostest
-  ];
   propagatedBuildInputs = [
     eigen
-    eigen-conversions
     geometry-msgs
-    glog
     message-runtime
     nav-msgs
-    pcl-ros
     roscpp
-    rospy
     sensor-msgs
     std-msgs
+    std-srvs
     tf
-    yaml-cpp
   ];
   nativeBuildInputs = [ catkin ];
+  # the cmake hook defaults to Release, which adds -DNDEBUG (see CMakeLists.txt)
+  cmakeBuildType = "RelWithDebInfo";
+  cmakeFlags = [
+    "-DFASTER_LIO_TRACY_DIR=${tracyCapture.tracySrc}"
+    "-DFASTER_LIO_TRACY_CAPTURE=${tracyCapture}/bin/tracy-capture"
+  ];
 
   meta = {
     description = "FasterLIO is developed from FastLIO2, see related paper: Chunge Bai et al. Faster-LIO: Lightweight Tightly
