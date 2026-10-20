@@ -158,18 +158,42 @@ TEST(PointCloudPreprocess, OrganizedCloudIsReadColumnByColumn) {
 }
 
 TEST(PointCloudPreprocess, ScanEndCountsDroppedPoints) {
-    // the latest time is on a NaN point, a blind point and a point the decimation skips: the scan end still has it
-    const float nan = std::numeric_limits<float>::quiet_NaN();
+    // the latest time is on a blind point and a point the decimation skips: the scan end still has it
     PointCloudPreprocess preprocess(1.0, 2);
     CloudPtr out = std::make_shared<PointCloudType>();
-    EXPECT_DOUBLE_EQ(preprocess.Process(MakeCloud({In(5, 0, 0, 0, 1000000), In(nan, 0, 0, 0, 99000000)}, 2, 1), out),
-                     99.0);
     EXPECT_DOUBLE_EQ(preprocess.Process(MakeCloud({In(5, 0, 0, 0, 1000000), In(0.1f, 0, 0, 0, 98000000)}, 2, 1), out),
                      98.0);
     EXPECT_DOUBLE_EQ(preprocess.Process(MakeCloud({In(5, 0, 0, 0, 1000000), In(6, 0, 0, 0, 97000000)}, 2, 1), out),
                      97.0);
     ASSERT_EQ(out->size(), 1u);
     EXPECT_DOUBLE_EQ(out->front().time, 1.0);
+}
+
+TEST(PointCloudPreprocess, ScanEndIgnoresInvalidReturns) {
+    // a NaN or inf point has no position, and its time is not trusted either
+    const float nan = std::numeric_limits<float>::quiet_NaN();
+    const float inf = std::numeric_limits<float>::infinity();
+    PointCloudPreprocess preprocess(0, 1);
+    CloudPtr out = std::make_shared<PointCloudType>();
+    EXPECT_DOUBLE_EQ(preprocess.Process(MakeCloud({In(5, 0, 0, 0, 1000000), In(nan, 0, 0, 0, 99000000)}, 2, 1), out),
+                     1.0);
+    EXPECT_DOUBLE_EQ(preprocess.Process(MakeCloud({In(5, 0, 0, 0, 1000000), In(0, inf, 0, 0, 99000000)}, 2, 1), out),
+                     1.0);
+    EXPECT_EQ(out->size(), 1u);
+}
+
+TEST(PointCloudPreprocess, ScanEndIgnoresTimesPastOneSecond) {
+    // one corrupt time must not move the scan end seconds ahead; the point is dropped, the rest kept
+    PointCloudPreprocess preprocess(0, 1);
+    CloudPtr out = std::make_shared<PointCloudType>();
+    EXPECT_DOUBLE_EQ(preprocess.Process(MakeCloud({In(5, 0, 0, 0, 100000000), In(6, 0, 0, 0, 4000000000u),
+                                                   In(7, 0, 0, 0, 1000000000)},
+                                                  3, 1),
+                                        out),
+                     1000.0);
+    ASSERT_EQ(out->size(), 2u);
+    EXPECT_EQ(out->at(0).x, 5);
+    EXPECT_EQ(out->at(1).x, 7);
 }
 
 TEST(PointCloudPreprocess, ScanEndWithoutTimeIsZero) {
