@@ -57,6 +57,8 @@ class LaserMapping {
     void SetPosestamp(T &out);
 
     PointType PointBodyToWorld(PointType const &pi);
+    /// scan_down_body_ to the world frame at state_point_, into scan_down_world_
+    void ScanDownBodyToWorld();
     void PointBodyLidarToIMU(PointType const *const pi, PointType *const po);
 
     void MapIncremental();

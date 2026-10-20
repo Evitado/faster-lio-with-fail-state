@@ -28,6 +28,6 @@ generate_messages(
 )
 
 catkin_package(
-        CATKIN_DEPENDS geometry_msgs nav_msgs roscpp std_msgs std_srvs message_runtime
+        CATKIN_DEPENDS geometry_msgs nav_msgs roscpp sensor_msgs std_msgs std_srvs tf message_runtime
         DEPENDS EIGEN3
 )

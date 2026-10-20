@@ -7,7 +7,6 @@
 #include <algorithm>
 #include <cstdio>
 #include <filesystem>
-#include <numeric>
 
 #include "profiling.h"
 
@@ -124,9 +123,7 @@ void LaserMapping::SubAndPubToROS() {
 
     sub_imu_ = nh_.subscribe<sensor_msgs::Imu>(imu_topic, 200000, [this](const sensor_msgs::Imu::ConstPtr &msg) {
         IMUCallBack(msg);
-        if (!lidar_buffer_.empty() && last_timestamp_imu_ >= lidar_end_time_) {
-            Run();
-        }
+        Run();
     });
 
     // ROS publisher init
@@ -230,10 +227,7 @@ void LaserMapping::ProcessScan() {
     // also for an empty scan, so fail_state keeps getting messages and can tell when to restart the LIO
     if (!lidar_odom_) {
         VoxelDownsample(*scan_undistort_, filter_size_surf_, *scan_down_body_);
-        scan_down_world_->clear();
-        scan_down_world_->reserve(scan_down_body_->size());
-        std::for_each(scan_down_body_->begin(), scan_down_body_->end(),
-                      [&](const auto &point) { scan_down_world_->push_back(PointBodyToWorld(point)); });
+        ScanDownBodyToWorld();
 
         PublishOdometry(pub_odom_aft_mapped_);
         PublishKeypoints(keypoints_pub_);
@@ -269,11 +263,7 @@ void LaserMapping::ProcessScan() {
         // so odometry, TF and the keypoints for fail_state have no gap after a start
         first_skipped_scan_time_ = -1;
         VoxelDownsample(*scan_undistort_, filter_size_surf_, *scan_down_body_);
-        scan_down_world_->clear();
-        scan_down_world_->reserve(scan_down_body_->size());
-        for (const auto &point : *scan_down_body_) {
-            scan_down_world_->push_back(PointBodyToWorld(point));
-        }
+        ScanDownBodyToWorld();
         trajectory_.push_back({lidar_end_stamp_, state_point_.pos, Eigen::Quaterniond(state_point_.rot)});
         PublishKeypoints(keypoints_pub_);
         PublishPath(pub_path_);
@@ -356,11 +346,7 @@ void LaserMapping::PublishSkippedScan() {
         path_.poses.clear();
     }
     state_point_ = kf_.get_x();
-    scan_down_world_->clear();
-    scan_down_world_->reserve(scan_down_body_->size());
-    for (const auto &point : *scan_down_body_) {
-        scan_down_world_->push_back(PointBodyToWorld(point));
-    }
+    ScanDownBodyToWorld();
     PublishKeypoints(keypoints_pub_);
     PublishOdometry(pub_odom_aft_mapped_);
     ProfileScan();
@@ -464,14 +450,11 @@ void LaserMapping::MapIncremental() {
     points_to_add.reserve(cur_pts);
     point_no_need_downsample.reserve(cur_pts);
 
-    std::vector<size_t> index(cur_pts);
-    std::iota(index.begin(), index.end(), 0.0);
-
     // same transform as PointBodyToWorld, composed once per scan instead of per point
     const common::M3D R_wl = state_point_.rot.toRotationMatrix() * state_point_.offset_R_L_I.toRotationMatrix();
     const common::V3D t_wl = state_point_.rot * state_point_.offset_T_L_I + state_point_.pos;
 
-    std::for_each(index.begin(), index.end(), [&](const size_t &i) {
+    for (int i = 0; i < cur_pts; ++i) {
         /* transform to world frame */
         const PointType &point_body = (*scan_down_body_)[i];
         const common::V3D p_world = R_wl * common::V3D(point_body.x, point_body.y, point_body.z) + t_wl;
@@ -495,7 +478,7 @@ void LaserMapping::MapIncremental() {
                 fabs(dis_2_center.y()) > 0.5 * filter_size_map_min_ &&
                 fabs(dis_2_center.z()) > 0.5 * filter_size_map_min_) {
                 point_no_need_downsample.emplace_back(point_world.x, point_world.y, point_world.z);
-                return;
+                continue;
             }
 
             // TODO delete this and tbbfy the loop based on num points
@@ -515,7 +498,7 @@ void LaserMapping::MapIncremental() {
         } else {
             points_to_add.emplace_back(point_world.x, point_world.y, point_world.z);
         }
-    });
+    }
 
     ivox_->AddPoints(points_to_add);
     ivox_->AddPoints(point_no_need_downsample);
@@ -838,6 +821,24 @@ void LaserMapping::SetPosestamp(T &out) {
     out.pose.orientation.y = state_point_.rot.coeffs()[1];
     out.pose.orientation.z = state_point_.rot.coeffs()[2];
     out.pose.orientation.w = state_point_.rot.coeffs()[3];
+}
+
+void LaserMapping::ScanDownBodyToWorld() {
+    // same transform as PointBodyToWorld, composed once per scan instead of per point
+    const common::M3D R_wl = state_point_.rot.toRotationMatrix() * state_point_.offset_R_L_I.toRotationMatrix();
+    const common::V3D t_wl = state_point_.rot * state_point_.offset_T_L_I + state_point_.pos;
+
+    scan_down_world_->resize(scan_down_body_->size());
+    for (size_t i = 0; i < scan_down_body_->size(); ++i) {
+        const PointType &point_body = (*scan_down_body_)[i];
+        const common::V3D p_world = R_wl * common::V3D(point_body.x, point_body.y, point_body.z) + t_wl;
+        PointType &point_world = (*scan_down_world_)[i];
+        point_world = PointType();
+        point_world.x = p_world.x();
+        point_world.y = p_world.y();
+        point_world.z = p_world.z();
+        point_world.intensity = point_body.intensity;
+    }
 }
 
 PointType LaserMapping::PointBodyToWorld(const PointType &pi) {

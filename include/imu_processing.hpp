@@ -200,12 +200,17 @@ void ImuProcess::RestartAtOrigin(esekfom::esekf<state_ikfom, 12, input_ikfom> &k
                         s.offset_R_L_I.coeffs().allFinite() && s.offset_T_L_I.allFinite() &&
                         kf_state.get_P().allFinite();
     if (!finite) {
-        ROS_WARN("filter state is not finite, re-initializing from the IMU");
-        Reset();
-        state_ikfom fresh;
-        kf_state.change_x(fresh);
-        SetInitialCovariance(kf_state);
-        return;
+        // Start over from what the startup IMU init estimated (gyro bias, and mean_acc_ that scales the
+        // accelerometer) instead of re-running the init, which would publish nothing for MAX_INI_COUNT scans
+        ROS_WARN("filter state is not finite, restarting with the startup IMU biases");
+        s = state_ikfom();
+        s.bg = mean_gyr_;
+        s.offset_T_L_I = Lidar_T_wrt_IMU_;
+        s.offset_R_L_I = Lidar_R_wrt_IMU_;
+        s.grav = S2(-mean_acc_ / mean_acc_.norm() * common::G_m_s2);  // without an accelerometer average below
+        angvel_last_ = common::Zero3d;
+        acc_s_last_ = common::Zero3d;
+        IMUpose_.clear();
     }
 
     if (acc_lowpass_time_ >= 0 && acc_lowpass_.norm() > 0.1 * mean_acc_.norm()) {
