@@ -47,6 +47,8 @@ buildRosPackage rec {
     tf
   ];
   nativeBuildInputs = [ catkin ];
+  # the cmake hook defaults to Release, which adds -DNDEBUG (see CMakeLists.txt)
+  cmakeBuildType = "RelWithDebInfo";
   cmakeFlags = [
     "-DFASTER_LIO_TRACY_DIR=${tracyCapture.tracySrc}"
     "-DFASTER_LIO_TRACY_CAPTURE=${tracyCapture}/bin/tracy-capture"

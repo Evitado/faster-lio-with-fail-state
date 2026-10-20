@@ -157,6 +157,29 @@ TEST(PointCloudPreprocess, OrganizedCloudIsReadColumnByColumn) {
     }
 }
 
+TEST(PointCloudPreprocess, ScanEndCountsDroppedPoints) {
+    // the latest time is on a NaN point, a blind point and a point the decimation skips: the scan end still has it
+    const float nan = std::numeric_limits<float>::quiet_NaN();
+    PointCloudPreprocess preprocess(1.0, 2);
+    CloudPtr out = std::make_shared<PointCloudType>();
+    EXPECT_DOUBLE_EQ(preprocess.Process(MakeCloud({In(5, 0, 0, 0, 1000000), In(nan, 0, 0, 0, 99000000)}, 2, 1), out),
+                     99.0);
+    EXPECT_DOUBLE_EQ(preprocess.Process(MakeCloud({In(5, 0, 0, 0, 1000000), In(0.1f, 0, 0, 0, 98000000)}, 2, 1), out),
+                     98.0);
+    EXPECT_DOUBLE_EQ(preprocess.Process(MakeCloud({In(5, 0, 0, 0, 1000000), In(6, 0, 0, 0, 97000000)}, 2, 1), out),
+                     97.0);
+    ASSERT_EQ(out->size(), 1u);
+    EXPECT_DOUBLE_EQ(out->front().time, 1.0);
+}
+
+TEST(PointCloudPreprocess, ScanEndWithoutTimeIsZero) {
+    PointCloudPreprocess preprocess(0, 1);
+    CloudPtr out = std::make_shared<PointCloudType>();
+    std::vector<Field> fields = DefaultFields();
+    fields.pop_back();  // no 't'
+    EXPECT_DOUBLE_EQ(preprocess.Process(MakeCloud({In(5, 0, 0, 0, 7000000)}, 1, 1, fields), out), 0.0);
+}
+
 TEST(PointCloudPreprocess, MissingIntensityAndTimeAreZero) {
     const std::vector<Field> xyz{{"x", 0, PointField::FLOAT32}, {"y", 4, PointField::FLOAT32}, {"z", 8, PointField::FLOAT32}};
     const PointCloudType out = Preprocess(MakeCloud({In(1, 2, 3, 9, 9'000'000)}, 1, 1, xyz, 12));

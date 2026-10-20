@@ -128,6 +128,7 @@ class LaserMapping {
 
     std::deque<ros::Time> time_buffer_;  // scan header stamps, kept as ros::Time so outputs keep exact ns
     std::deque<CloudPtr> lidar_buffer_;
+    std::deque<double> scan_end_buffer_;  // scan end [ms after the stamp] from all points of the message
     std::deque<sensor_msgs::Imu::ConstPtr> imu_buffer_;
     nav_msgs::Odometry odom_aft_mapped_;
 

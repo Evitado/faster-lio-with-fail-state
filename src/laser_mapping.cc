@@ -264,6 +264,21 @@ void LaserMapping::ProcessScan() {
         ivox_->AddPoints(first_points);
         first_lidar_time_ = measures_.lidar_bag_time_;
         flg_first_scan_ = false;
+
+        // a usable scan: it ends a run of skipped scans, and it is published at the start pose like any other scan
+        // so odometry, TF and the keypoints for fail_state have no gap after a start
+        first_skipped_scan_time_ = -1;
+        VoxelDownsample(*scan_undistort_, filter_size_surf_, *scan_down_body_);
+        scan_down_world_->clear();
+        scan_down_world_->reserve(scan_down_body_->size());
+        for (const auto &point : *scan_down_body_) {
+            scan_down_world_->push_back(PointBodyToWorld(point));
+        }
+        trajectory_.push_back({lidar_end_stamp_, state_point_.pos, Eigen::Quaterniond(state_point_.rot)});
+        PublishKeypoints(keypoints_pub_);
+        PublishPath(pub_path_);
+        PublishOdometry(pub_odom_aft_mapped_);
+        ProfileScan();
         return;
     }
     flg_EKF_inited_ = (measures_.lidar_bag_time_ - first_lidar_time_) >= INIT_TIME;
@@ -367,10 +382,11 @@ void LaserMapping::StandardPCLCallBack(const sensor_msgs::PointCloud2::ConstPtr 
         ROS_ERROR_STREAM("lidar loop back, clear buffer");
         lidar_buffer_.clear();
         time_buffer_.clear();  // must stay index-aligned with lidar_buffer_
+        scan_end_buffer_.clear();
     }
 
     CloudPtr ptr(new PointCloudType());
-    preprocess_->Process(msg, ptr);
+    scan_end_buffer_.push_back(preprocess_->Process(msg, ptr));
     lidar_buffer_.push_back(ptr);
     time_buffer_.push_back(msg->header.stamp);
     last_timestamp_lidar_ = msg->header.stamp.toSec();
@@ -398,13 +414,16 @@ bool LaserMapping::SyncPackages() {
         measures_.lidar_ = lidar_buffer_.front();
         measures_.lidar_bag_time_ = time_buffer_.front().toSec();
 
-        // Scan duration from the header stamp to the scan end [s]
-        double scan_duration = lidar_mean_scantime_;
+        // Scan duration from the header stamp to the scan end [s], from the times of all points of the message
+        // (not the last kept point, which depends on which points the NaN and blind filters dropped)
         if (measures_.lidar_->size() <= 1) {
             ROS_WARN_STREAM("Too few input point cloud!");
-        } else if (measures_.lidar_->back().time / double(1000) >= 0.5 * lidar_mean_scantime_) {
+        }
+        double scan_duration = lidar_mean_scantime_;
+        const double scan_end = scan_end_buffer_.front() / double(1000);
+        if (scan_end >= 0.5 * lidar_mean_scantime_) {
             scan_num_++;
-            scan_duration = measures_.lidar_->back().time / double(1000);
+            scan_duration = scan_end;
             lidar_mean_scantime_ += (scan_duration - lidar_mean_scantime_) / scan_num_;
         }
 
@@ -432,6 +451,7 @@ bool LaserMapping::SyncPackages() {
 
     lidar_buffer_.pop_front();
     time_buffer_.pop_front();
+    scan_end_buffer_.pop_front();
     lidar_pushed_ = false;
     return true;
 }
@@ -535,8 +555,9 @@ void LaserMapping::ObsModel(state_ikfom &s, esekfom::dyn_share_datastruct<double
     cond_jtj_valid_ = false;
 
     /// Computes point to plane distances
-    auto R_wl = (s.rot * s.offset_R_L_I).cast<float>();
-    auto t_wl = (s.rot * s.offset_T_L_I + s.pos).cast<float>();
+    // concrete types, not auto: an auto Eigen expression would reference temporaries gone before the loop runs
+    const common::M3F R_wl = (s.rot * s.offset_R_L_I).toRotationMatrix().cast<float>();
+    const common::V3F t_wl = (s.rot * s.offset_T_L_I + s.pos).cast<float>();
     // The map does not change between IEKF iterations, so a point that moved less than nn_reuse_distance_
     // since its last search keeps its neighbours and plane; only its residual is recomputed.
     const bool may_reuse = searched_this_scan_ && nn_reuse_distance_ > 0;

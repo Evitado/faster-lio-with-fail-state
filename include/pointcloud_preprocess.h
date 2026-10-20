@@ -18,10 +18,12 @@ class PointCloudPreprocess {
     PointCloudPreprocess(double blind, int point_filter_num)
         : point_filter_num_(std::max(point_filter_num, 1)), blind_(blind) {}
 
-    void Process(const sensor_msgs::PointCloud2::ConstPtr &msg, CloudPtr &pcl_out);
+    /// returns the scan end [ms after the header stamp]: the latest per-point time of the whole message, NaN and
+    /// blind points included, so it does not depend on which points survive the filters; 0 without a 't' field
+    double Process(const sensor_msgs::PointCloud2::ConstPtr &msg, CloudPtr &pcl_out);
 
    private:
-    void Ouster128Handler(const sensor_msgs::PointCloud2::ConstPtr &msg);
+    double Ouster128Handler(const sensor_msgs::PointCloud2::ConstPtr &msg);
 
     PointCloudType cloud_out_;
 

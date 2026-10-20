@@ -2,8 +2,11 @@ cmake_minimum_required(VERSION 3.5)
 project(faster_lio)
 
 if (NOT CMAKE_BUILD_TYPE)
-    set(CMAKE_BUILD_TYPE "Release")
+    set(CMAKE_BUILD_TYPE "RelWithDebInfo")
 endif ()
+# as on main: optimized with debug info, but without -DNDEBUG, so the IKFoM/Eigen asserts still abort on a
+# numerical blow-up instead of the node publishing NaN odometry
+set(CMAKE_CXX_FLAGS_RELWITHDEBINFO "-O3 -g")
 
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)

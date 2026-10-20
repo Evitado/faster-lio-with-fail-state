@@ -7,11 +7,12 @@
 
 namespace faster_lio {
 
-void PointCloudPreprocess::Process(const sensor_msgs::PointCloud2::ConstPtr &msg, CloudPtr &pcl_out) {
+double PointCloudPreprocess::Process(const sensor_msgs::PointCloud2::ConstPtr &msg, CloudPtr &pcl_out) {
     PROFILE_SCOPE("preprocess");
-    Ouster128Handler(msg);
+    const double scan_end = Ouster128Handler(msg);
     // hand the result over instead of copying it; cloud_out_ is cleared at the start of every handler
     pcl_out->swap(cloud_out_);
+    return scan_end;
 }
 
 
@@ -40,7 +41,7 @@ T ReadField(const uint8_t *point, int offset) {
 }
 }  // namespace
 
-void PointCloudPreprocess::Ouster128Handler(const sensor_msgs::PointCloud2::ConstPtr &msg) {
+double PointCloudPreprocess::Ouster128Handler(const sensor_msgs::PointCloud2::ConstPtr &msg) {
     using sensor_msgs::PointField;
     const int off_x = FieldOffset(*msg, "x", PointField::FLOAT32);
     const int off_y = FieldOffset(*msg, "y", PointField::FLOAT32);
@@ -52,7 +53,7 @@ void PointCloudPreprocess::Ouster128Handler(const sensor_msgs::PointCloud2::Cons
     cloud_out_.clear();
     if (!layout_ok) {
         ROS_ERROR_THROTTLE(5.0, "unsupported point cloud layout: need little-endian float32 x, y, z");
-        return;
+        return 0.0;
     }
 
     const int off_intensity = FieldOffset(*msg, "intensity", PointField::FLOAT32);
@@ -65,16 +66,19 @@ void PointCloudPreprocess::Ouster128Handler(const sensor_msgs::PointCloud2::Cons
     cloud_out_.reserve(num_points / point_filter_num_ + 1);
 
     // Read the kept points (every point_filter_num_-th in row-major order) straight from the message buffer. An
-    // organized ouster cloud is visited column by column: all points of a column share one time stamp, so the
-    // output is already in time order and undistortion does not have to sort it.
+    // organized ouster cloud is visited column by column, so the output is roughly in time order (a destaggered
+    // cloud still differs in time within a column; undistortion sorts what is not).
     const size_t width = msg->width;
     const size_t height = msg->height;
+    uint32_t scan_end_ns = 0;
     for (size_t k = 0; k < num_points; ++k) {
         const size_t row = k % height;
         const size_t col = k / height;
         const size_t i = row * width + col;
-        if (i % point_filter_num_ != 0) continue;
         const uint8_t *point = msg->data.data() + row * msg->row_step + col * msg->point_step;
+        // the scan end over every point, also the skipped, NaN and blind ones
+        if (off_t >= 0) scan_end_ns = std::max(scan_end_ns, ReadField<uint32_t>(point, off_t));
+        if (i % point_filter_num_ != 0) continue;
         const float x = ReadField<float>(point, off_x);
         const float y = ReadField<float>(point, off_y);
         const float z = ReadField<float>(point, off_z);
@@ -91,6 +95,7 @@ void PointCloudPreprocess::Ouster128Handler(const sensor_msgs::PointCloud2::Cons
 
         cloud_out_.push_back(added_pt);
     }
+    return scan_end_ns / 1e6;  // ms, like PointType::time
 }
 
 }  // namespace faster_lio
