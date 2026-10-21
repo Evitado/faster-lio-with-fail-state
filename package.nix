@@ -18,10 +18,17 @@
   unstable ? null,
 }:
 let
-  # recorder started by ~profiling_enable, built from the same Tracy commit as the client compiled in below
-  tracyCapture = import ./profiling/tracy-tools.nix (
-    { captureOnly = true; } // lib.optionalAttrs (unstable != null) { pkgs = unstable; }
-  );
+  # recorder started by ~profiling_enable, built from the same Tracy commit as the client compiled in below.
+  # Missing when this file is copied without the source tree (evitado_nix_production/pkgs/faster_lio): then no
+  # flags, and CMake builds without Tracy
+  tracyTools = ./profiling/tracy-tools.nix;
+  tracyCapture =
+    if builtins.pathExists tracyTools then
+      import tracyTools (
+        { captureOnly = true; } // lib.optionalAttrs (unstable != null) { pkgs = unstable; }
+      )
+    else
+      null;
 in
 buildRosPackage rec {
   pname = "ros-noetic-faster-lio";
@@ -49,7 +56,7 @@ buildRosPackage rec {
   nativeBuildInputs = [ catkin ];
   # the cmake hook defaults to Release, which adds -DNDEBUG (see CMakeLists.txt)
   cmakeBuildType = "RelWithDebInfo";
-  cmakeFlags = [
+  cmakeFlags = lib.optionals (tracyCapture != null) [
     "-DFASTER_LIO_TRACY_DIR=${tracyCapture.tracySrc}"
     "-DFASTER_LIO_TRACY_CAPTURE=${tracyCapture}/bin/tracy-capture"
   ];
